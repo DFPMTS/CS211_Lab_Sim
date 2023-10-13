@@ -442,6 +442,7 @@ void Simulator::decode() {
           this->panic("Invalide fmv.w.x");
         }
         rs1_reg_type = RegType::INT;
+        op1 = this->reg[rs1];
         op1str = REGNAME[rs1];
         // ! dirty workaround
         rs2_reg_type = RegType::INT;
