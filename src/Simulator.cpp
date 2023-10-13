@@ -1315,10 +1315,10 @@ void Simulator::excecute() {
       !isReadMem(inst)) {
     if (this->dRegNew.rs1_reg_type == rd_reg_type &&
         this->dRegNew.rs1 == destReg) {
-      if (rs1_reg_type == RegType::INT) {
+      if (rd_reg_type == RegType::INT) {
         this->dRegNew.op1 = out;
         this->executeWBRegType = RegType::INT;
-      } else if (rs1_reg_type == RegType::FLOAT) {
+      } else if (rd_reg_type == RegType::FLOAT) {
         this->dRegNew.op1_f = out_f;
         this->executeWBRegType = RegType::FLOAT;
       }
@@ -1330,10 +1330,10 @@ void Simulator::excecute() {
     }
     if (this->dRegNew.rs2_reg_type == rd_reg_type &&
         this->dRegNew.rs2 == destReg) {
-      if (rs2_reg_type == RegType::INT) {
+      if (rd_reg_type == RegType::INT) {
         this->dRegNew.op2 = out;
         this->executeWBRegType = RegType::INT;
-      } else if (rs2_reg_type == RegType::FLOAT) {
+      } else if (rd_reg_type == RegType::FLOAT) {
         this->dRegNew.op2_f = out_f;
         this->executeWBRegType = RegType::FLOAT;
       }

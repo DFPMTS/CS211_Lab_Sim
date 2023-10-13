@@ -190,7 +190,7 @@ std::string get_inst() {
 
 int main() {
   srand(time(0));
-  for (int i = 0; i < 50; ++i) {
+  for (int i = 0; i < 200; ++i) {
     std::cout << "\"" << get_inst() << "\"\n";
   }
 }
