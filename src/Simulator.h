@@ -19,6 +19,7 @@ namespace RISCV {
 
 const int REGNUM = 32;
 extern const char *REGNAME[32];
+extern const char *REGNAME_F[32];
 typedef uint32_t RegId;
 enum Reg {
   REG_ZERO = 0,
@@ -118,7 +119,33 @@ enum Inst {
   SLLW = 51,
   SRLW = 52,
   SRAW = 53,
+
+  // lab0: F extension
+  FMV_W_X = 54,
+  FMV_X_W = 55,
+
+  FCVT_S_W = 56,
+  FCVT_W_S = 57,
+
+  FLW = 58,
+  FSW = 59,
+
+  FADD_S = 60,
+  FSUB_S = 61,
+  FMUL_S = 62,
+  FDIV_S = 63,
+  FSQRT_S = 64,
+
+  FMADD_S = 65,
+  FMSUB_S = 66,
+  FSGNJ_S = 67,
+  // lab0: end
+
   UNKNOWN = -1,
+};
+enum class RegType {
+  INT,
+  FLOAT,
 };
 extern const char *INSTNAME[];
 
@@ -135,6 +162,14 @@ const int OP_JAL = 0x6F;
 const int OP_JALR = 0x67;
 const int OP_IMM32 = 0x1B;
 const int OP_32 = 0x3B;
+
+// lab0: F extension
+const int OP_FP = 0x53;
+const int OP_FMADD_S = 0x43;
+const int OP_FMSUB_S = 0x47;
+const int OP_LOAD_FP = 0x07;
+const int OP_STORE_FP = 0x27;
+// lab0: end
 
 inline bool isBranch(Inst inst) {
   if (inst == BEQ || inst == BNE || inst == BLT || inst == BGE ||
@@ -153,7 +188,7 @@ inline bool isJump(Inst inst) {
 
 inline bool isReadMem(Inst inst) {
   if (inst == LB || inst == LH || inst == LW || inst == LD || inst == LBU ||
-      inst == LHU || inst == LWU) {
+      inst == LHU || inst == LWU || inst == FLW) {
     return true;
   }
   return false;
@@ -167,9 +202,13 @@ public:
   bool verbose;
   bool shouldDumpHistory;
   uint64_t pc;
-  uint64_t predictedPC; // for branch prediction module, predicted PC destination
+  uint64_t
+      predictedPC;    // for branch prediction module, predicted PC destination
   uint64_t anotherPC; // // another possible prediction destination
   uint64_t reg[RISCV::REGNUM];
+  // lab0: F extension
+  float reg_f[RISCV::REGNUM];
+  // lab0: end
   uint32_t stackBase;
   uint32_t maximumStackSize;
   MemoryManager *memory;
@@ -202,15 +241,22 @@ private:
     // Control Signals
     bool bubble;
     uint32_t stall;
-    RISCV::RegId rs1, rs2;
+    RISCV::RegId rs1, rs2, rs3;
 
     uint64_t pc;
     RISCV::Inst inst;
     int64_t op1;
     int64_t op2;
+    float op1_f;
+    float op2_f;
+    float op3_f;
     RISCV::RegId dest;
     int64_t offset;
     bool predictedBranch;
+    RISCV::RegType rs1_reg_type;
+    RISCV::RegType rs2_reg_type;
+    RISCV::RegType rs3_reg_type;
+    RISCV::RegType rd_reg_type;
   } dReg, dRegNew;
   struct EReg {
     // Control Signals
@@ -221,14 +267,20 @@ private:
     RISCV::Inst inst;
     int64_t op1;
     int64_t op2;
+    float op2_f;
     bool writeReg;
     RISCV::RegId destReg;
     int64_t out;
+    float out_f;
     bool writeMem;
     bool readMem;
     bool readSignExt;
     uint32_t memLen;
     bool branch;
+    RISCV::RegType rs1_reg_type;
+    RISCV::RegType rs2_reg_type;
+    RISCV::RegType rs3_reg_type;
+    RISCV::RegType rd_reg_type;
   } eReg, eRegNew;
   struct MReg {
     // Control Signals
@@ -240,16 +292,23 @@ private:
     int64_t op1;
     int64_t op2;
     int64_t out;
+    float out_f;
     bool writeReg;
     RISCV::RegId destReg;
+    RISCV::RegType rs1_reg_type;
+    RISCV::RegType rs2_reg_type;
+    RISCV::RegType rs3_reg_type;
+    RISCV::RegType rd_reg_type;
   } mReg, mRegNew;
 
   // Pipeline Related Variables
   // To avoid older values(in MEM) overriding newer values(in EX)
   bool executeWriteBack;
   RISCV::RegId executeWBReg;
+  RISCV::RegType executeWBRegType;
   bool memoryWriteBack;
   RISCV::RegId memoryWBReg;
+  RISCV::RegType memoryWBRegType;
 
   // Components in the execute stage
   // Reference:
@@ -272,68 +331,147 @@ private:
 
   // The lowest cycle of an datamem access
   const uint32_t datamem_lat_lower_bound = 1;
-  // The lock cast on the stage where the next stage is busy across multiple cycles
+  // The lock cast on the stage where the next stage is busy across multiple
+  // cycles
   const uint32_t datamem_stall_lock = UINT32_MAX;
 
   const uint32_t latency[number_of_component] = {
-    /* ALU */       0,
-    /* memCalc */   1,
-    /* dataMem */   datamem_stall_lock,
-    /* branchALU */ 0,
-    /* iMul */      2,
-    /* iDiv */      6,
-    /* int2FP */    0,
-    /* fpDiv */     24,
-    /* fmaAdd */    3,
-    /* fmaMul */    6,
+      /* ALU */ 0,
+      /* memCalc */ 1,
+      /* dataMem */ datamem_stall_lock,
+      /* branchALU */ 0,
+      /* iMul */ 2,
+      /* iDiv */ 6,
+      /* int2FP */ 0,
+      /* FP2int */ 0,
+      /* fpDiv */ 24,
+      /* fmaAdd */ 3,
+      /* fmaMul */ 6,
   };
 
   inline executeComponent getComponentUsed(RISCV::Inst inst) {
     { // start of using namespace, to reduce code duplication
       using namespace RISCV;
-      switch (inst)
-      {
+      switch (inst) {
+        // fp
+      case FMV_W_X:
+      case FMV_X_W:
+        return ALU;
+        break;
+
+      case FCVT_S_W:
+        return int2FP;
+        break;
+
+      case FCVT_W_S:
+        return fp2Int;
+        break;
+
+      case FLW:
+        return dataMem;
+        break;
+
+      case FSW:
+        return memCalc;
+        break;
+
+      case FADD_S:
+      case FSUB_S:
+        return fmaAdd;
+
+      case FMUL_S:
+        return fmaMul;
+
+      case FDIV_S:
+      case FSQRT_S:
+        return fpDiv;
+
+      case FMADD_S:
+      case FMSUB_S:
+        return std::max(fmaAdd, fmaMul);
+
         /* When using the instructions below,
-           general ALU is used */
-        case ADDI: case ADD: case ADDIW: case ADDW:
-        case SUB:  case SUBW:
-        case SLTI: case SLT: case SLTIU: case SLTU:
-        case XORI: case XOR:
-        case ORI:  case OR:
-        case ANDI: case AND:
-        case SLLI: case SLL: case SLLIW: case SLLW:
-        case SRLI: case SRL: case SRLIW: case SRLW:
-        case SRAI: case SRA: case SRAW:  case SRAIW:
-          return ALU; break;
-        /* When using the instructions below,
-           ALU for memory address calculation is used */
-        case SB:   case SH:  case SW:    case SD:
-          return memCalc; break;
-        /* When using the instructions below,
-           datamem is used */
-        case LB:   case LH:  case LW:    case LD:
-        case LBU:  case LHU: case LWU:
-          return dataMem; break;
-        /* When using the instructions below,
-           ALU for branch offset calculation is used */
-        case LUI:  case AUIPC: case JAL:  case JALR:
-        case BEQ:  case BNE:   case BLT:  case BGE:
-        case BLTU: case BGEU:
-          return branchALU; break;
-        /* When using the instructions below,
-           integer multiplier is used */
-        case MUL:
-          return iMul; break;
-        /* When using the instructions below,
-           integer divider is used */
-        case DIV:
-          return iDiv; break;
-        // YOUR CODE HERE
-        // case INST:
-        // ...
-        // return COMPONENT_TYPE; break;
-        default:
-          return unknown; break;
+       general ALU is used */
+      case ADDI:
+      case ADD:
+      case ADDIW:
+      case ADDW:
+      case SUB:
+      case SUBW:
+      case SLTI:
+      case SLT:
+      case SLTIU:
+      case SLTU:
+      case XORI:
+      case XOR:
+      case ORI:
+      case OR:
+      case ANDI:
+      case AND:
+      case SLLI:
+      case SLL:
+      case SLLIW:
+      case SLLW:
+      case SRLI:
+      case SRL:
+      case SRLIW:
+      case SRLW:
+      case SRAI:
+      case SRA:
+      case SRAW:
+      case SRAIW:
+        return ALU;
+        break;
+      /* When using the instructions below,
+         ALU for memory address calculation is used */
+      case SB:
+      case SH:
+      case SW:
+      case SD:
+        return memCalc;
+        break;
+      /* When using the instructions below,
+         datamem is used */
+      case LB:
+      case LH:
+      case LW:
+      case LD:
+      case LBU:
+      case LHU:
+      case LWU:
+        return dataMem;
+        break;
+      /* When using the instructions below,
+         ALU for branch offset calculation is used */
+      case LUI:
+      case AUIPC:
+      case JAL:
+      case JALR:
+      case BEQ:
+      case BNE:
+      case BLT:
+      case BGE:
+      case BLTU:
+      case BGEU:
+        return branchALU;
+        break;
+      /* When using the instructions below,
+         integer multiplier is used */
+      case MUL:
+        return iMul;
+        break;
+      /* When using the instructions below,
+         integer divider is used */
+      case DIV:
+        return iDiv;
+        break;
+      // YOUR CODE HERE
+      // case INST:
+      // ...
+      // return COMPONENT_TYPE; break;
+      default:
+        return unknown;
+        break;
       }
     } // end of using namespace RISCV;
 

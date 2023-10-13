@@ -2,6 +2,7 @@
  * Created by He, Hao at 2019-3-11
  */
 
+#include <cfenv>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,7 @@ BranchPredictor branchPredictor;
 Simulator simulator(&memory, &branchPredictor);
 
 int main(int argc, char **argv) {
+  std::feclearexcept(FE_ALL_EXCEPT);
   if (!parseParameters(argc, argv)) {
     printUsage();
     exit(-1);
