@@ -13,3 +13,9 @@ sanity/spike
 sanity/saved.c
 sanity/test.c
 sanity/my
+sanity/dump.txt
+.gitignore
+.gitignore
+sanity/matrixmulti.c
+sanity/my.S
+sanity/log
