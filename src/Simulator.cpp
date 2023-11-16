@@ -156,8 +156,10 @@ void Simulator::simulate() {
 
     this->executeWriteBack = false;
     this->executeWBReg = -1;
+    this->executeWBRegType = RegType::INVALID;
     this->memoryWriteBack = false;
     this->memoryWBReg = -1;
+    this->memoryWBRegType = RegType::INVALID;
 
     // THE EXECUTION ORDER of these functions are important!!!
     // Changing them will introduce strange bugs
@@ -212,6 +214,15 @@ void Simulator::simulate() {
   }
 }
 
+bool same_reg(RISCV::RegType type1, RISCV::RegId id1, RISCV::RegType type2,
+              RISCV::RegId id2) {
+  if (type1 == RegType::INVALID || type2 == RegType::INVALID)
+    return false;
+  if (id1 == -1 || id2 == -1)
+    return false;
+  return (type1 == type2) && (id1 == id2);
+}
+
 void Simulator::fetch() {
   if (this->pc % 2 != 0) {
     this->panic("Illegal PC 0x%x!\n", this->pc);
@@ -259,7 +270,7 @@ void Simulator::decode() {
   float op1_f = 0, op2_f = 0, op3_f = 0;
   RegId reg3 = -1;
   RegType rs1_reg_type = RegType::INT, rs2_reg_type = RegType::INT,
-          rs3_reg_type = RegType::INT, rd_reg_type = RegType::INT;
+          rs3_reg_type = RegType::INVALID, rd_reg_type = RegType::INT;
 
   // Reg for 32bit instructions
   if (this->fReg.len == 4) // 32 bit instruction
@@ -419,8 +430,8 @@ void Simulator::decode() {
         rs1_reg_type = RegType::INT;
         op1 = this->reg[rs1];
         op1str = REGNAME[rs1];
-        // ! dirty workaround
-        rs2_reg_type = RegType::INT;
+        // * set to invalid
+        rs2_reg_type = RegType::INVALID;
         instname = "fcvt.s.w";
         insttype = FCVT_S_W;
         break;
@@ -431,21 +442,21 @@ void Simulator::decode() {
         }
         rd_reg_type = RegType::INT;
         deststr = REGNAME[rd];
-        // ! dirty workaround
-        rs2_reg_type = RegType::INT;
+        // * set to invalid
+        rs2_reg_type = RegType::INVALID;
         instname = "fcvt.w.s";
         insttype = FCVT_W_S;
         break;
 
       case 0x1E:
         if (rs2 != 0) {
-          this->panic("Invalide fmv.w.x");
+          this->panic("Invalid fmv.w.x");
         }
         rs1_reg_type = RegType::INT;
         op1 = this->reg[rs1];
         op1str = REGNAME[rs1];
-        // ! dirty workaround
-        rs2_reg_type = RegType::INT;
+        // * set to invalid
+        rs2_reg_type = RegType::INVALID;
         instname = "fmv.w.x";
         insttype = FMV_W_X;
         break;
@@ -456,8 +467,8 @@ void Simulator::decode() {
         }
         rd_reg_type = RegType::INT;
         deststr = REGNAME[rd];
-        // ! dirty workaround
-        rs2_reg_type = RegType::INT;
+        // * set to invalid
+        rs2_reg_type = RegType::INVALID;
         instname = "fmv.x.w";
         insttype = FMV_X_W;
         break;
@@ -467,8 +478,8 @@ void Simulator::decode() {
           // ! panic
           this->panic("fsqrt.s's rs2 field must be 0!");
         }
-        // ! dirty workaround
-        rs2_reg_type = RegType::INT;
+        // * set to invalid
+        rs2_reg_type = RegType::INVALID;
         instname = "fsqrt.s";
         insttype = FSQRT_S;
         break;
@@ -1278,19 +1289,19 @@ void Simulator::excecute() {
       this->history.predictedBranch++;
     } else {
       // Control Hazard Here
-      // Bug fix
+      // ! Bug fix
       if (branch)
         this->pc = dRegPC;
       else
         this->pc = dReg.pc + 4;
-      // Bug fix end
+      // ! Bug fix end
       this->fRegNew.bubble = true;
       this->dRegNew.bubble = true;
       this->history.unpredictedBranch++;
       this->history.controlHazardCount++;
     }
     // this->dReg.pc: fetch original inst addr, not the modified one
-    this->branchPredictor->update(this->dReg.pc, branch);
+    // ! this->branchPredictor->update(this->dReg.pc, branch);
   }
   if (isJump(inst)) {
     // Control hazard here
@@ -1300,9 +1311,12 @@ void Simulator::excecute() {
     this->history.controlHazardCount++;
   }
   if (isReadMem(inst) && (destReg != 0 || rd_reg_type == RegType::FLOAT)) {
-    if ((this->dRegNew.rs1 == destReg && dReg.rs1_reg_type == rd_reg_type) ||
-        (this->dRegNew.rs2 == destReg && dReg.rs2_reg_type == rd_reg_type) ||
-        (this->dRegNew.rs3 == destReg && dReg.rs3_reg_type == rd_reg_type)) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
+                 this->dRegNew.rs1) ||
+        same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
+                 this->dRegNew.rs2) ||
+        same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
+                 this->dRegNew.rs3)) {
       this->fRegNew.stall = 2;
       this->dRegNew.stall = 2;
       this->eRegNew.bubble = true;
@@ -1321,8 +1335,8 @@ void Simulator::excecute() {
   // Check for data hazard and forward data
   if (writeReg && (destReg != 0 || rd_reg_type == RegType::FLOAT) &&
       !isReadMem(inst)) {
-    if (this->dRegNew.rs1_reg_type == rd_reg_type &&
-        this->dRegNew.rs1 == destReg) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
+                 this->dRegNew.rs1)) {
       if (rd_reg_type == RegType::INT) {
         this->dRegNew.op1 = out;
         this->executeWBRegType = RegType::INT;
@@ -1336,8 +1350,8 @@ void Simulator::excecute() {
       if (verbose)
         printf("  Forward Data %s to Decode op1\n", REGNAME[destReg]);
     }
-    if (this->dRegNew.rs2_reg_type == rd_reg_type &&
-        this->dRegNew.rs2 == destReg) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
+                 this->dRegNew.rs2)) {
       if (rd_reg_type == RegType::INT) {
         this->dRegNew.op2 = out;
         this->executeWBRegType = RegType::INT;
@@ -1351,13 +1365,14 @@ void Simulator::excecute() {
       if (verbose)
         printf("  Forward Data %s to Decode op2\n", REGNAME[destReg]);
     }
-    // ! rs3_reg_type is RegType::INT if it does not exist
+    // ! rs3_reg_type is RegType::INVALID if it does not exist
     // ! should switch to more reasonable implemention
-    if (rd_reg_type == RegType::FLOAT &&
-        this->dRegNew.rs3_reg_type == rd_reg_type &&
-        this->dRegNew.rs3 == destReg) {
-      this->dRegNew.op3_f = out_f;
-      this->executeWBRegType = RegType::FLOAT;
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
+                 this->dRegNew.rs3)) {
+      if (rd_reg_type == RegType::FLOAT) {
+        this->dRegNew.op3_f = out_f;
+        this->executeWBRegType = RegType::FLOAT;
+      }
       this->executeWBReg = destReg;
       this->executeWriteBack = true;
       this->history.dataHazardCount++;
@@ -1501,13 +1516,13 @@ void Simulator::memoryAccess() {
 
   // Check for data hazard and forward data
   if (writeReg && (destReg != 0 || rd_reg_type == RegType::FLOAT)) {
-    if (this->dRegNew.rs1_reg_type == rd_reg_type &&
-        this->dRegNew.rs1 == destReg) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
+                 this->dRegNew.rs1)) {
       // Avoid overwriting recent values
       if (this->executeWriteBack == false ||
           (this->executeWriteBack &&
-           !(this->executeWBReg == destReg &&
-             this->executeWBRegType == rd_reg_type))) {
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
         if (rd_reg_type == RegType::INT) {
           this->dRegNew.op1 = out;
           this->memoryWBRegType = RegType::INT;
@@ -1524,13 +1539,13 @@ void Simulator::memoryAccess() {
         this->history.dataHazardCount++;
       }
     }
-    if (this->dRegNew.rs2_reg_type == rd_reg_type &&
-        this->dRegNew.rs2 == destReg) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
+                 this->dRegNew.rs2)) {
       // Avoid overwriting recent values
       if (this->executeWriteBack == false ||
           (this->executeWriteBack &&
-           !(this->executeWBReg == destReg &&
-             this->executeWBRegType == rd_reg_type))) {
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
         if (rd_reg_type == RegType::INT) {
           this->dRegNew.op2 = out;
           this->memoryWBRegType = RegType::INT;
@@ -1547,16 +1562,17 @@ void Simulator::memoryAccess() {
         this->history.dataHazardCount++;
       }
     }
-    if (rd_reg_type == RegType::FLOAT &&
-        this->dRegNew.rs3_reg_type == rd_reg_type &&
-        this->dRegNew.rs3 == destReg) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
+                 this->dRegNew.rs3)) {
       // Avoid overwriting recent values
       if (this->executeWriteBack == false ||
           (this->executeWriteBack &&
-           !(this->executeWBReg == destReg &&
-             this->executeWBRegType == rd_reg_type))) {
-        this->dRegNew.op3_f = out_f;
-        this->memoryWBRegType = RegType::FLOAT;
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
+        if (rd_reg_type == RegType::FLOAT) {
+          this->dRegNew.op3_f = out_f;
+          this->memoryWBRegType = RegType::FLOAT;
+        }
         this->memoryWriteBack = true;
         this->memoryWBReg = destReg;
         this->history.dataHazardCount++;
@@ -1567,8 +1583,9 @@ void Simulator::memoryAccess() {
 
     // Corner case of forwarding mem load data to stalled decode reg
     // ! ------------------------MAYBE-A-BUG------------------------
-    if (this->dReg.stall) {
-      if (this->dReg.rs1 == destReg && rd_reg_type == dReg.rs1_reg_type) {
+    if (this->dReg.stall && readMem) {
+      if (same_reg(rd_reg_type, destReg, this->dReg.rs1_reg_type,
+                   this->dReg.rs1)) {
         if (rd_reg_type == RegType::INT) {
           this->dReg.op1 = out;
           this->memoryWBRegType = RegType::INT;
@@ -1584,7 +1601,8 @@ void Simulator::memoryAccess() {
         this->memoryWBReg = destReg;
         this->history.dataHazardCount++;
       }
-      if (this->dReg.rs2 == destReg && rd_reg_type == dReg.rs2_reg_type) {
+      if (same_reg(rd_reg_type, destReg, this->dReg.rs2_reg_type,
+                   this->dReg.rs2)) {
         if (rd_reg_type == RegType::INT) {
           this->dReg.op2 = out;
           this->memoryWBRegType = RegType::INT;
@@ -1600,10 +1618,12 @@ void Simulator::memoryAccess() {
         this->memoryWBReg = destReg;
         this->history.dataHazardCount++;
       }
-      if (rd_reg_type == RegType::FLOAT && this->dReg.rs3 == destReg &&
-          rd_reg_type == dReg.rs3_reg_type) {
-        this->dReg.op3_f = out_f;
-        this->memoryWBRegType = RegType::FLOAT;
+      if (same_reg(rd_reg_type, destReg, this->dReg.rs3_reg_type,
+                   this->dReg.rs3)) {
+        if (rd_reg_type == RegType::FLOAT) {
+          this->dReg.op3_f = out_f;
+          this->memoryWBRegType = RegType::FLOAT;
+        }
         if (verbose)
           printf("  Forward Data %s to Decode op3\n", REGNAME_F[destReg]);
         this->memoryWriteBack = true;
@@ -1648,23 +1668,22 @@ void Simulator::writeBack() {
   }
 
   RegId destReg = mReg.destReg;
-  RegType rs1_reg_type = this->mReg.rs1_reg_type;
-  RegType rs2_reg_type = this->mReg.rs2_reg_type;
-  RegType rs3_reg_type = this->mReg.rs3_reg_type;
   RegType rd_reg_type = this->mReg.rd_reg_type;
 
   if (this->mReg.writeReg &&
       (this->mReg.destReg != 0 || rd_reg_type == RegType::FLOAT)) {
     // Check for data hazard and forward data
-    if (this->dRegNew.rs1 == this->mReg.destReg &&
-        dRegNew.rs1_reg_type == rd_reg_type) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
+                 this->dRegNew.rs1)) {
       // Avoid overwriting recent data
       if (!this->executeWriteBack ||
-          (this->executeWriteBack && (this->executeWBReg != destReg ||
-                                      this->executeWBRegType != rd_reg_type))) {
+          (this->executeWriteBack &&
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
         if (!this->memoryWriteBack ||
-            (this->memoryWriteBack && (this->memoryWBReg != destReg ||
-                                       this->memoryWBRegType != rd_reg_type))) {
+            (this->memoryWriteBack &&
+             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
+                       this->memoryWBReg))) {
           if (rd_reg_type == RegType::INT)
             this->dRegNew.op1 = this->mReg.out;
           else if (rd_reg_type == RegType::FLOAT)
@@ -1677,15 +1696,17 @@ void Simulator::writeBack() {
         }
       }
     }
-    if (this->dRegNew.rs2 == this->mReg.destReg &&
-        dRegNew.rs2_reg_type == rd_reg_type) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
+                 this->dRegNew.rs2)) {
       // Avoid overwriting recent data
       if (!this->executeWriteBack ||
-          (this->executeWriteBack && (this->executeWBReg != destReg ||
-                                      this->executeWBRegType != rd_reg_type))) {
+          (this->executeWriteBack &&
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
         if (!this->memoryWriteBack ||
-            (this->memoryWriteBack && (this->memoryWBReg != destReg ||
-                                       this->memoryWBRegType != rd_reg_type))) {
+            (this->memoryWriteBack &&
+             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
+                       this->memoryWBReg))) {
           if (rd_reg_type == RegType::INT)
             this->dRegNew.op2 = this->mReg.out;
           else if (rd_reg_type == RegType::FLOAT)
@@ -1698,15 +1719,17 @@ void Simulator::writeBack() {
         }
       }
     }
-    if (this->dRegNew.rs3 == this->mReg.destReg &&
-        rd_reg_type == RegType::FLOAT && dRegNew.rs3_reg_type == rd_reg_type) {
+    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
+                 this->dRegNew.rs3)) {
       // Avoid overwriting recent data
       if (!this->executeWriteBack ||
-          (this->executeWriteBack && (this->executeWBReg != destReg ||
-                                      this->executeWBRegType != rd_reg_type))) {
+          (this->executeWriteBack &&
+           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
+                     this->executeWBReg))) {
         if (!this->memoryWriteBack ||
-            (this->memoryWriteBack && (this->memoryWBReg != destReg ||
-                                       this->memoryWBRegType != rd_reg_type))) {
+            (this->memoryWriteBack &&
+             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
+                       this->memoryWBReg))) {
           this->dRegNew.op3_f = this->mReg.out_f;
 
           this->history.dataHazardCount++;

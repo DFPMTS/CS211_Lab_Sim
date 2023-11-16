@@ -143,10 +143,7 @@ enum Inst {
 
   UNKNOWN = -1,
 };
-enum class RegType {
-  INT,
-  FLOAT,
-};
+enum class RegType { INT, FLOAT, INVALID };
 extern const char *INSTNAME[];
 
 // Opcode field
