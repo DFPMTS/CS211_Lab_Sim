@@ -1276,7 +1276,12 @@ void Simulator::excecute() {
       this->history.predictedBranch++;
     } else {
       // Control Hazard Here
-      this->pc = this->anotherPC;
+      // Bug fix
+      if (branch)
+        this->pc = dRegPC;
+      else
+        this->pc = dReg.pc + 4;
+      // Bug fix end
       this->fRegNew.bubble = true;
       this->dRegNew.bubble = true;
       this->history.unpredictedBranch++;
