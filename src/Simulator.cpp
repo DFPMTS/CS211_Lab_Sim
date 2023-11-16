@@ -906,8 +906,10 @@ void Simulator::decode() {
 
   bool predictedBranch = false;
   if (isBranch(insttype)) {
-    predictedBranch = this->branchPredictor->predict(this->fReg.pc, insttype,
-                                                     op1, op2, offset);
+    // predictedBranch = this->branchPredictor->predict(this->fReg.pc, insttype,
+    //                                                  op1, op2, offset);
+    predictedBranch = false;
+    // ! turn off branch prediction
     if (predictedBranch) {
       this->predictedPC = this->fReg.pc + offset;
       this->anotherPC = this->fReg.pc + 4;
