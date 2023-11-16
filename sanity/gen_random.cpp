@@ -80,9 +80,23 @@ std::string xsave_y() { return "sw " + get_xvar() + ",20(sp);"; }
 std::string xsave_z() { return "sw " + get_xvar() + ",24(sp);"; }
 std::string xsave_w() { return "sw " + get_xvar() + ",28(sp);"; }
 
+std::string fcvt_w_s() {
+  return "fcvt.w.s " + get_xvar() + ", " + get_fvar() + ";";
+}
+std::string fcvt_s_w() {
+  return "fcvt.s.w " + get_fvar() + ", " + get_xvar() + ";";
+}
+
+std::string fmv_w_x() {
+  return "fmv.w.x " + get_fvar() + ", " + get_xvar() + ";";
+}
+std::string fmv_x_w() {
+  return "fmv.x.w " + get_xvar() + ", " + get_fvar() + ";";
+}
+
 std::string get_inst() {
   int id, lw;
-  id = rand() % 20;
+  id = rand() % 23;
   switch (id) {
   case 0:
     return gen_fadd();
@@ -184,6 +198,18 @@ std::string get_inst() {
       break;
     }
     break;
+  case 20:
+    return fcvt_w_s();
+    break;
+  case 21:
+    return fcvt_s_w();
+    break;
+  case 22:
+    return fmv_w_x();
+    break;
+  case 23:
+    return fmv_x_w();
+    break;
   default:
     return "";
   }
@@ -207,10 +233,10 @@ int main() {
   register long xz asm("s4");
   register long xw asm("s5");
   asm("addi sp, sp, -32;"
-      "li %[xx], 1;"
-      "li %[xy], 2;"
-      "li %[xz], 3;"
-      "li %[xw], 4;"
+      "li %[xx], 31;"
+      "li %[xy], 44;"
+      "li %[xz], 12;"
+      "li %[xw], 99;"
       "fcvt.s.w %[fx], %[xx];"
       "fcvt.s.w %[fy], %[xy];"
       "fcvt.s.w %[fz], %[xz];"
@@ -226,7 +252,7 @@ int main() {
   )prelude"
        << std::endl;
 
-  for (int i = 0; i < 50; ++i) {
+  for (int i = 0; i < 100; ++i) {
     fout << "\"" << get_inst() << "\"\n";
   }
 

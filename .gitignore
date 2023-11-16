@@ -8,3 +8,8 @@ cmake-build-debug/
 cacti/obj_opt
 cacti/cacti
 d4-7/
+sanity/spike
+.gitignore
+sanity/saved.c
+sanity/test.c
+sanity/my
