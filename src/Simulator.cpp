@@ -1019,12 +1019,22 @@ void Simulator::excecute() {
 
   case FCVT_S_W:
     writeReg = true;
-    out_f = (float)(op1);
+    out_f = (float)((int)(op1));
 
     break;
   case FCVT_W_S:
     writeReg = true;
-    out = (int32_t)(op1_f);
+    if (std::isnan(op1_f)) {
+      out = INT32_MAX;
+    } else if (std::isinf(op1_f) || (double)op1_f > (double)INT32_MAX ||
+               (double)op1_f < (double)INT32_MIN) {
+      if (op1_f > 0)
+        out = INT32_MAX;
+      else
+        out = INT32_MIN;
+    } else {
+      out = roundevenf32(op1_f);
+    }
     break;
 
   case FLW:
@@ -1281,6 +1291,10 @@ void Simulator::excecute() {
     break;
   default:
     this->panic("Unknown instruction type %d\n", inst);
+  }
+
+  if (std::isnan(out_f)) {
+    out_f = std::bit_cast<float>(0x7fc00000);
   }
 
   // Pipeline Related Code
@@ -1772,7 +1786,8 @@ int64_t Simulator::handleSystemCall(int64_t op1, int64_t op2) {
     break;
   case 3:
   case 93: // exit
-    printf("Program exit from an exit() system call\n");
+    if (verbose)
+      printf("Program exit from an exit() system call\n");
     if (shouldDumpHistory) {
       printf("Dumping history to dump.txt...");
       this->dumpHistory();
@@ -1811,19 +1826,22 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
-  printf("------------ STATISTICS -----------\n");
-  printf("Number of Instructions: %u\n", this->history.instCount);
-  printf("Number of Cycles: %u\n", this->history.cycleCount);
-  printf("Avg Cycles per Instrcution: %.4f\n",
-         (float)this->history.cycleCount / this->history.instCount);
-  printf("Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
-         (float)this->history.predictedBranch /
-             (this->history.predictedBranch + this->history.unpredictedBranch),
-         this->branchPredictor->strategyName().c_str());
-  printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
-  printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
-  printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
-  printf("-----------------------------------\n");
+  if (verbose) {
+    printf("------------ STATISTICS -----------\n");
+    printf("Number of Instructions: %u\n", this->history.instCount);
+    printf("Number of Cycles: %u\n", this->history.cycleCount);
+    printf("Avg Cycles per Instrcution: %.4f\n",
+           (float)this->history.cycleCount / this->history.instCount);
+    printf(
+        "Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
+        (float)this->history.predictedBranch /
+            (this->history.predictedBranch + this->history.unpredictedBranch),
+        this->branchPredictor->strategyName().c_str());
+    printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
+    printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
+    printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
+    printf("-----------------------------------\n");
+  }
   // this->memory->printStatistics();
 }
 
