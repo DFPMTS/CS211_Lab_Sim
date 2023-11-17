@@ -1,8 +1,8 @@
 #include "lib.h"
 
-const int M = 10;
+const int M = 32;
 
-void matmulti(int a[M][M], int b[M][M], int c[M][M], int M) {
+void matmulti(float a[M][M], float b[M][M], float c[M][M], int M) {
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
       c[i][j] = 0;
@@ -14,7 +14,7 @@ void matmulti(int a[M][M], int b[M][M], int c[M][M], int M) {
 }
 
 int main() {
-  int A[M][M], B[M][M], C[M][M];
+  float A[M][M], B[M][M], C[M][M];
 
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
@@ -27,7 +27,7 @@ int main() {
   print_s("The content of A is: \n");
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
-      print_d(A[i][j]);
+      print_f(A[i][j]);
       print_s(" ");
     }
     print_s("\n");
@@ -36,7 +36,7 @@ int main() {
   print_s("The content of B is: \n");
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
-      print_d(B[i][j]);
+      print_f(B[i][j]);
       print_s(" ");
     }
     print_s("\n");
@@ -47,7 +47,7 @@ int main() {
   print_s("The content of C=A*B is: \n");
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
-      print_d(C[i][j]);
+      print_f(C[i][j]);
       print_s(" ");
     }
     print_s("\n");

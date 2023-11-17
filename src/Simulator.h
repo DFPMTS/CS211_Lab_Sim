@@ -191,9 +191,8 @@ inline bool isReadMem(Inst inst) {
   return false;
 }
 
-} // namespace RISCV
-
 class Simulator {
+
 public:
   bool isSingleStep;
   bool verbose;
@@ -278,7 +277,7 @@ private:
     RISCV::RegType rs2_reg_type;
     RISCV::RegType rs3_reg_type;
     RISCV::RegType rd_reg_type;
-  } eReg, eRegNew;
+  };
   struct MReg {
     // Control Signals
     bool bubble;
@@ -296,7 +295,7 @@ private:
     RISCV::RegType rs2_reg_type;
     RISCV::RegType rs3_reg_type;
     RISCV::RegType rd_reg_type;
-  } mReg, mRegNew;
+  };
 
   // Pipeline Related Variables
   // To avoid older values(in MEM) overriding newer values(in EX)
@@ -312,7 +311,7 @@ private:
   // https://docs.boom-core.org/en/latest/sections/intro-overview/boom-pipeline.html
   enum executeComponent {
     ALU,
-    memCalc,
+    // memCalc,
     dataMem,
     branchALU,
     iMul,
@@ -330,11 +329,11 @@ private:
   const uint32_t datamem_lat_lower_bound = 1;
   // The lock cast on the stage where the next stage is busy across multiple
   // cycles
-  const uint32_t datamem_stall_lock = UINT32_MAX;
+  static const uint32_t datamem_stall_lock = UINT32_MAX;
 
-  const uint32_t latency[number_of_component] = {
+  static constexpr uint32_t latency[number_of_component] = {
       /* ALU */ 0,
-      /* memCalc */ 1,
+      // /* memCalc */ 1,
       /* dataMem */ datamem_stall_lock,
       /* branchALU */ 0,
       /* iMul */ 2,
@@ -346,7 +345,7 @@ private:
       /* fmaMul */ 6,
   };
 
-  inline executeComponent getComponentUsed(RISCV::Inst inst) {
+  static inline executeComponent getComponentUsed(RISCV::Inst inst) {
     { // start of using namespace, to reduce code duplication
       using namespace RISCV;
       switch (inst) {
@@ -369,7 +368,8 @@ private:
         break;
 
       case FSW:
-        return memCalc;
+        // return memCalc;
+        return dataMem;
         break;
 
       case FADD_S:
@@ -385,7 +385,8 @@ private:
 
       case FMADD_S:
       case FMSUB_S:
-        return std::max(fmaAdd, fmaMul);
+        // ! attention
+        return fmaMul;
 
         /* When using the instructions below,
        general ALU is used */
@@ -425,7 +426,8 @@ private:
       case SH:
       case SW:
       case SD:
-        return memCalc;
+        // return memCalc;
+        return dataMem;
         break;
       /* When using the instructions below,
          datamem is used */
@@ -462,10 +464,16 @@ private:
       case DIV:
         return iDiv;
         break;
-      // YOUR CODE HERE
-      // case INST:
-      // ...
-      // return COMPONENT_TYPE; break;
+        // YOUR CODE HERE
+        // case INST:
+        // ...
+        // return COMPONENT_TYPE; break;
+
+      case ECALL:
+        // ! assuming magical syscall
+        return ALU;
+        break;
+
       default:
         return unknown;
         break;
@@ -494,16 +502,300 @@ private:
     std::string memoryDump;
   } history;
 
+  static bool same_reg(RISCV::RegType type1, RISCV::RegId id1,
+                       RISCV::RegType type2, RISCV::RegId id2) {
+    if (type1 == RegType::INVALID || type2 == RegType::INVALID)
+      return false;
+    if (id1 == -1 || id2 == -1)
+      return false;
+    return (type1 == type2) && (id1 == id2);
+  }
+
+  struct FUStatus {
+    void clear() {
+      busy = false;
+      inst = UNKNOWN;
+      dispatched = false;
+
+      offset = 0;
+
+      rd_type = RegType::INVALID;
+      rd = -1;
+
+      rs1_type = RegType::INVALID;
+      rs1 = -1;
+      rs1_ready = false;
+      rs1_FU = unknown;
+
+      rs2_type = RegType::INVALID;
+      rs2 = -1;
+      rs2_ready = false;
+      rs2_FU = unknown;
+
+      rs3_type = RegType::INVALID;
+      rs3 = -1;
+      rs3_ready = false;
+      rs3_FU = unknown;
+    }
+
+    bool ready() { return rs1_ready && rs2_ready && rs3_ready; }
+
+    bool check_WAR(RegType other_rd_type, RegId other_rd, executeComponent FU) {
+      if (!busy || dispatched)
+        return true;
+      bool pass = true;
+      if (same_reg(other_rd_type, other_rd, rs1_type, rs1) && rs1_ready) {
+        pass = false;
+      }
+      if (same_reg(other_rd_type, other_rd, rs2_type, rs2) && rs2_ready) {
+        pass = false;
+      }
+      if (same_reg(other_rd_type, other_rd, rs3_type, rs3) && rs3_ready) {
+        pass = false;
+      }
+      return pass;
+    }
+
+    void update_ready(RegType other_rd_type, RegId other_rd) {
+      if (!busy || dispatched)
+        return;
+      if (same_reg(other_rd_type, other_rd, rs1_type, rs1)) {
+        rs1_ready = true;
+      }
+      if (same_reg(other_rd_type, other_rd, rs2_type, rs2)) {
+        rs2_ready = true;
+      }
+      if (same_reg(other_rd_type, other_rd, rs3_type, rs3)) {
+        rs3_ready = true;
+      }
+    }
+
+    bool busy;
+    bool dispatched;
+    Inst inst;
+    uint64_t pc;
+
+    int offset;
+
+    RegType rd_type;
+    RegId rd;
+
+    RegType rs1_type;
+    RegId rs1;
+    int64_t op1;
+    float op1_f;
+    bool rs1_ready;
+    executeComponent rs1_FU;
+
+    RegType rs2_type;
+    RegId rs2;
+    int64_t op2;
+    float op2_f;
+    bool rs2_ready;
+    executeComponent rs2_FU;
+
+    RegType rs3_type;
+    RegId rs3;
+    float op3_f;
+    bool rs3_ready;
+    executeComponent rs3_FU;
+
+    int64_t out;
+    float out_f;
+    int timeout;
+  };
+
+  struct Scoreboard {
+    Scoreboard() {
+      memset(result_status_x, -1, sizeof(result_status_x));
+      memset(result_status_f, -1, sizeof(result_status_f));
+      for (int i = 0; i < number_of_component; ++i)
+        fu_status[i].clear();
+    }
+
+    // * try to issue an instruction
+    // return false: 1. FU needed busy 3. result register pending
+    bool issue(DReg &d_reg, FReg &f_reg, Scoreboard &scoreboardNew) {
+      // check FU status
+      executeComponent fu = getComponentUsed(d_reg.inst);
+      if (fu_status[fu].busy)
+        return false;
+      if (d_reg.inst == FMADD_S || d_reg.inst == FMSUB_S) {
+        // also need to check fmaAdd
+        if (fu_status[fmaAdd].busy)
+          return false;
+      }
+      // check rd
+      if (d_reg.rd_reg_type == RegType::INT) {
+        if (result_status_x[d_reg.dest] != -1)
+          return false;
+      } else if (d_reg.rd_reg_type == RegType::FLOAT) {
+        if (result_status_f[d_reg.dest] != -1)
+          return false;
+      }
+      // clear to issue
+      // ! dirty workaround
+      std::swap(fu_status[fu], scoreboardNew.fu_status[fu]);
+
+      fu_status[fu].inst = d_reg.inst;
+      fu_status[fu].busy = true;
+      fu_status[fu].dispatched = false;
+      fu_status[fu].timeout = latency[fu];
+      fu_status[fu].offset = d_reg.offset;
+      fu_status[fu].pc = d_reg.pc;
+
+      fu_status[fu].op1 = d_reg.op1;
+      fu_status[fu].op2 = d_reg.op2;
+      fu_status[fu].op1_f = d_reg.op1_f;
+      fu_status[fu].op2_f = d_reg.op3_f;
+      fu_status[fu].op3_f = d_reg.op3_f;
+
+      fu_status[fu].rd = d_reg.dest;
+      fu_status[fu].rd_type = d_reg.rd_reg_type;
+      if (d_reg.rd_reg_type == RegType::INT) {
+        scoreboardNew.result_status_x[d_reg.dest] = fu;
+      } else if (d_reg.rd_reg_type == RegType::FLOAT) {
+        scoreboardNew.result_status_f[d_reg.dest] = fu;
+      }
+
+      fu_status[fu].rs1 = d_reg.rs1;
+      fu_status[fu].rs1_type = d_reg.rs1_reg_type;
+      if (d_reg.rs1_reg_type == RegType::INT) {
+        fu_status[fu].rs1_ready = (result_status_x[d_reg.rs1] == -1);
+        fu_status[fu].rs1_FU = (executeComponent)result_status_x[d_reg.rs1];
+      } else if (fu_status[fu].rs1_type == RegType::FLOAT) {
+        fu_status[fu].rs1_ready = (result_status_f[d_reg.rs1] == -1);
+        fu_status[fu].rs1_FU = (executeComponent)result_status_f[d_reg.rs1];
+      } else {
+        fu_status[fu].rs1_ready = true;
+      }
+
+      fu_status[fu].rs2 = d_reg.rs2;
+      fu_status[fu].rs2_type = d_reg.rs2_reg_type;
+      if (d_reg.rs2_reg_type == RegType::INT) {
+        fu_status[fu].rs2_ready = (result_status_x[d_reg.rs2] == -1);
+        fu_status[fu].rs2_FU = (executeComponent)result_status_x[d_reg.rs2];
+      } else if (fu_status[fu].rs2_type == RegType::FLOAT) {
+        fu_status[fu].rs2_ready = (result_status_f[d_reg.rs2] == -1);
+        fu_status[fu].rs2_FU = (executeComponent)result_status_f[d_reg.rs2];
+      } else {
+        fu_status[fu].rs2_ready = true;
+      }
+
+      fu_status[fu].rs3 = d_reg.rs3;
+      fu_status[fu].rs3_type = d_reg.rs3_reg_type;
+      if (d_reg.rs3_reg_type == RegType::INT) {
+        fu_status[fu].rs3_ready = (result_status_x[d_reg.rs3] == -1);
+        fu_status[fu].rs3_FU = (executeComponent)result_status_x[d_reg.rs3];
+      } else if (fu_status[fu].rs3_type == RegType::FLOAT) {
+        fu_status[fu].rs3_ready = (result_status_f[d_reg.rs3] == -1);
+        fu_status[fu].rs3_FU = (executeComponent)result_status_f[d_reg.rs3];
+      } else {
+        fu_status[fu].rs3_ready = true;
+      }
+
+      if (d_reg.inst == FMADD_S || d_reg.inst == FMSUB_S) {
+        // also lock fmaAdd
+        scoreboardNew.fu_status[fmaAdd].busy = true;
+        scoreboardNew.fu_status[fmaAdd].timeout = -1;
+      }
+
+      /* "Branch instructions hold up the issuing of further instructions until
+         they have completed."
+         https://www.icsa.inf.ed.ac.uk/research/groups/hase/models/6600/index.html
+      */
+      // ! TODO stall fetch & decode for branch
+      if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
+        f_reg.stall = datamem_stall_lock;
+        d_reg.stall = datamem_stall_lock;
+      }
+
+      // ! dirty workaround
+      std::swap(fu_status[fu], scoreboardNew.fu_status[fu]);
+
+      return true;
+    }
+
+    // 1. execute instructions when source operands are ready
+    // 2. retire instructions when there's no WAR hazard
+    void tick(Simulator *simulator, Scoreboard &scoreboardNew) {
+      // printf("memCalc FU %d   %d   %d   %d   %d\n", fu_status[0].inst,
+      //        fu_status[0].busy, fu_status[0].ready(), fu_status[0].rs1_ready,
+      //        fu_status[0].rs2_ready);
+      for (int i = 0; i < number_of_component; ++i) {
+        if (fu_status[i].busy && fu_status[i].ready()) {
+          if (!fu_status[i].dispatched) {
+            // dispatch to FU
+            simulator->execute(fu_status[i], scoreboardNew.fu_status[i]);
+            scoreboardNew.fu_status[i].dispatched = true;
+          } else {
+            // printf("FU:  %d dispatched, timeout: %d\n", i,
+            //        fu_status[i].timeout);
+            // check if complete
+            // ! note that for fma the fmaAdd timeout was set to -1 and need to
+            // ! be unlocked by fmaMul
+            if (fu_status[i].timeout == 0) {
+              // ready to retire, check WAR
+              bool WAR_pass = true;
+              for (int j = 0; j < number_of_component; ++j) {
+                if (j != i) {
+                  if (!fu_status[j].check_WAR(fu_status[i].rd_type,
+                                              fu_status[i].rd,
+                                              (executeComponent)i)) {
+                    WAR_pass = false;
+                    break;
+                  }
+                }
+              }
+              // printf("FU:  %d completed, WAR_pass: %d\n", i, WAR_pass);
+              if (WAR_pass) {
+                // writeback
+                simulator->writeBack(fu_status[i]);
+                scoreboardNew.fu_status[i].busy = false;
+                if (i == fmaMul && fu_status[fmaAdd].timeout < 0) {
+                  scoreboardNew.fu_status[fmaAdd].busy = false;
+                }
+                if (fu_status[i].rd_type == RegType::INT) {
+                  scoreboardNew.result_status_x[fu_status[i].rd] = -1;
+                  // printf("cleared INT  %d\n", fu_status[i].rd);
+                } else if (fu_status[i].rd_type == RegType::FLOAT) {
+                  scoreboardNew.result_status_f[fu_status[i].rd] = -1;
+                  // printf("cleared FP  %d\n", fu_status[i].rd);
+                }
+                for (int j = 0; j < number_of_component; ++j) {
+                  if (j != i) {
+                    scoreboardNew.fu_status[j].update_ready(
+                        fu_status[i].rd_type, fu_status[i].rd);
+                  }
+                }
+              }
+            } else {
+              // printf("Timeout:    %d\n", fu_status[i].timeout);
+              scoreboardNew.fu_status[i].timeout = fu_status[i].timeout - 1;
+            }
+          }
+        }
+      }
+    }
+
+    FUStatus fu_status[number_of_component];
+    int result_status_x[32];
+    int result_status_f[32];
+  } scoreboard, scoreboardNew;
+
   void fetch();
   void decode();
-  void excecute();
-  void memoryAccess();
-  void writeBack();
+  void execute(FUStatus &fu_status, FUStatus &new_fu_status);
+  void writeBack(FUStatus &fu_status);
 
   int64_t handleSystemCall(int64_t op1, int64_t op2);
 
   std::string getRegInfoStr();
   void panic(const char *format, ...);
+
+  int decode_hold = 0;
 };
+
+} // namespace RISCV
 
 #endif

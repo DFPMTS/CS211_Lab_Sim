@@ -131,19 +131,14 @@ void Simulator::simulate() {
   memset(&this->fRegNew, 0, sizeof(this->fRegNew));
   memset(&this->dReg, 0, sizeof(this->dReg));
   memset(&this->dRegNew, 0, sizeof(this->dReg));
-  memset(&this->eReg, 0, sizeof(this->eReg));
-  memset(&this->eRegNew, 0, sizeof(this->eRegNew));
-  memset(&this->mReg, 0, sizeof(this->mReg));
-  memset(&this->mRegNew, 0, sizeof(this->mRegNew));
 
   // Insert Bubble to later pipeline stages
   fReg.bubble = true;
   dReg.bubble = true;
-  eReg.bubble = true;
-  mReg.bubble = true;
 
   // Main Simulation Loop
   while (true) {
+    // getchar();
     if (this->reg[0] != 0) {
       // Some instruction might set this register to zero
       this->reg[0] = 0;
@@ -165,31 +160,32 @@ void Simulator::simulate() {
     // Changing them will introduce strange bugs
     this->fetch();
     this->decode();
-    this->excecute();
-    this->memoryAccess();
-    this->writeBack();
+    this->scoreboard.tick(this, scoreboardNew);
 
-    if (!this->fReg.stall)
-      this->fReg = this->fRegNew;
-    else
+    // this->excecute();
+    // this->writeBack();
+
+    if (!this->fReg.stall) {
+      if (!decode_hold)
+        this->fReg = this->fRegNew;
+    } else
       this->fReg.stall--;
     if (!this->dReg.stall)
       this->dReg = this->dRegNew;
     else
       this->dReg.stall--;
-    this->eReg = this->eRegNew;
-    this->mReg = this->mRegNew;
+
+    scoreboard = scoreboardNew;
+
     memset(&this->fRegNew, 0, sizeof(this->fRegNew));
     memset(&this->dRegNew, 0, sizeof(this->dRegNew));
-    memset(&this->eRegNew, 0, sizeof(this->eRegNew));
-    memset(&this->mRegNew, 0, sizeof(this->mRegNew));
 
-    // The Branch perdiction happens here to avoid strange bugs in branch
-    // prediction
-    if (!this->dReg.bubble && !this->dReg.stall && !this->fReg.stall &&
-        this->dReg.predictedBranch) {
-      this->pc = this->predictedPC;
-    }
+    // // The Branch perdiction happens here to avoid strange bugs in branch
+    // // prediction
+    // if (!this->dReg.bubble && !this->dReg.stall && !this->fReg.stall &&
+    //     this->dReg.predictedBranch) {
+    //   this->pc = this->predictedPC;
+    // }
 
     this->history.cycleCount++;
     this->history.regRecord.push_back(this->getRegInfoStr());
@@ -212,15 +208,6 @@ void Simulator::simulate() {
       }
     }
   }
-}
-
-bool same_reg(RISCV::RegType type1, RISCV::RegId id1, RISCV::RegType type2,
-              RISCV::RegId id2) {
-  if (type1 == RegType::INVALID || type2 == RegType::INVALID)
-    return false;
-  if (id1 == -1 || id2 == -1)
-    return false;
-  return (type1 == type2) && (id1 == id2);
 }
 
 void Simulator::fetch() {
@@ -269,8 +256,8 @@ void Simulator::decode() {
 
   float op1_f = 0, op2_f = 0, op3_f = 0;
   RegId reg3 = -1;
-  RegType rs1_reg_type = RegType::INT, rs2_reg_type = RegType::INT,
-          rs3_reg_type = RegType::INVALID, rd_reg_type = RegType::INT;
+  RegType rs1_reg_type = RegType::INVALID, rs2_reg_type = RegType::INVALID,
+          rs3_reg_type = RegType::INVALID, rd_reg_type = RegType::INVALID;
 
   // Reg for 32bit instructions
   if (this->fReg.len == 4) // 32 bit instruction
@@ -307,6 +294,7 @@ void Simulator::decode() {
     case OP_LOAD_FP:
       op1 = this->reg[rs1];
       reg1 = rs1;
+      rs1_reg_type = RegType::INT;
       op2 = imm_i;
       offset = imm_i;
       dest = rd;
@@ -324,6 +312,7 @@ void Simulator::decode() {
 
     case OP_STORE_FP:
       op1 = this->reg[rs1];
+      rs1_reg_type = RegType::INT;
       op2_f = this->reg_f[rs2];
       reg1 = rs1;
       reg2 = rs2;
@@ -498,6 +487,9 @@ void Simulator::decode() {
       op2 = this->reg[rs2];
       reg1 = rs1;
       reg2 = rs2;
+      rs1_reg_type = RegType::INT;
+      rs2_reg_type = RegType::INT;
+      rd_reg_type = RegType::INT;
       dest = rd;
       switch (funct3) {
       case 0x0: // add, mul, sub
@@ -592,6 +584,8 @@ void Simulator::decode() {
       break;
     case OP_IMM:
       op1 = this->reg[rs1];
+      rs1_reg_type = RegType::INT;
+      rd_reg_type = RegType::INT;
       reg1 = rs1;
       op2 = imm_i;
       dest = rd;
@@ -651,6 +645,7 @@ void Simulator::decode() {
       op2 = 0;
       offset = imm_u;
       dest = rd;
+      rd_reg_type = RegType::INT;
       instname = "lui";
       insttype = LUI;
       op1str = std::to_string(imm_u);
@@ -662,6 +657,7 @@ void Simulator::decode() {
       op2 = 0;
       offset = imm_u;
       dest = rd;
+      rd_reg_type = RegType::INT;
       instname = "auipc";
       insttype = AUIPC;
       op1str = std::to_string(imm_u);
@@ -673,6 +669,7 @@ void Simulator::decode() {
       op2 = 0;
       offset = imm_uj;
       dest = rd;
+      rd_reg_type = RegType::INT;
       instname = "jal";
       insttype = JAL;
       op1str = std::to_string(imm_uj);
@@ -682,8 +679,10 @@ void Simulator::decode() {
     case OP_JALR:
       op1 = this->reg[rs1];
       reg1 = rs1;
+      rs1_reg_type = RegType::INT;
       op2 = imm_i;
       dest = rd;
+      rd_reg_type = RegType::INT;
       instname = "jalr";
       insttype = JALR;
       op1str = REGNAME[rs1];
@@ -694,6 +693,8 @@ void Simulator::decode() {
     case OP_BRANCH:
       op1 = this->reg[rs1];
       op2 = this->reg[rs2];
+      rs1_reg_type = RegType::INT;
+      rs2_reg_type = RegType::INT;
       reg1 = rs1;
       reg2 = rs2;
       offset = imm_sb;
@@ -733,6 +734,8 @@ void Simulator::decode() {
     case OP_STORE:
       op1 = this->reg[rs1];
       op2 = this->reg[rs2];
+      rs1_reg_type = RegType::INT;
+      rs2_reg_type = RegType::INT;
       reg1 = rs1;
       reg2 = rs2;
       offset = imm_s;
@@ -767,6 +770,8 @@ void Simulator::decode() {
       op2 = imm_i;
       offset = imm_i;
       dest = rd;
+      rs1_reg_type = RegType::INT;
+      rd_reg_type = RegType::INT;
       switch (funct3) {
       case 0x0:
         instname = "lb";
@@ -811,6 +816,9 @@ void Simulator::decode() {
         reg1 = REG_A0;
         reg2 = REG_A7;
         dest = REG_A0;
+        rs1_reg_type = RegType::INT;
+        rs2_reg_type = RegType::INT;
+        rd_reg_type = RegType::INT;
         insttype = ECALL;
       } else {
         this->panic("Unknown OP_SYSTEM inst with funct3 0x%x and funct7 0x%x\n",
@@ -821,6 +829,8 @@ void Simulator::decode() {
     case OP_IMM32:
       op1 = this->reg[rs1];
       reg1 = rs1;
+      rs1_reg_type = RegType::INT;
+      rd_reg_type = RegType::INT;
       op2 = imm_i;
       dest = rd;
       switch (funct3) {
@@ -857,6 +867,10 @@ void Simulator::decode() {
       reg1 = rs1;
       reg2 = rs2;
       dest = rd;
+
+      rs1_reg_type = RegType::INT;
+      rs2_reg_type = RegType::INT;
+      rd_reg_type = RegType::INT;
 
       uint32_t temp = (inst >> 25) & 0x7F; // 32bit funct7 field
       switch (funct3) {
@@ -949,46 +963,64 @@ void Simulator::decode() {
   this->dRegNew.rs2_reg_type = rs2_reg_type;
   this->dRegNew.rs3_reg_type = rs3_reg_type;
   this->dRegNew.rd_reg_type = rd_reg_type;
+
+  if (scoreboard.issue(dRegNew, fRegNew, scoreboardNew)) {
+    // success
+    if (verbose)
+      printf("Issued\n");
+    decode_hold = 0;
+  } else {
+    // try next cycle
+    // this->pc = dRegNew.pc;
+    if (verbose)
+      printf("NextTime!\n");
+    decode_hold = 1;
+    this->pc = this->pc - 4;
+  }
 }
 
-void Simulator::excecute() {
-  if (this->dReg.stall) {
-    if (verbose) {
-      printf("Execute: Stall\n");
-    }
-    this->eRegNew.bubble = true;
-    return;
-  }
-  if (this->dReg.bubble) {
-    if (verbose) {
-      printf("Execute: Bubble\n");
-    }
-    this->eRegNew.bubble = true;
-    return;
-  }
-
+void Simulator::execute(Simulator::FUStatus &fu_status,
+                        Simulator::FUStatus &new_fu_status) {
   if (verbose) {
-    printf("Execute: %s\n", INSTNAME[this->dReg.inst]);
+    printf("Execute: %s\n", INSTNAME[fu_status.inst]);
   }
 
   this->history.instCount++;
 
-  Inst inst = this->dReg.inst;
-  int64_t op1 = this->dReg.op1;
-  int64_t op2 = this->dReg.op2;
-  float op1_f = this->dReg.op1_f;
-  float op2_f = this->dReg.op2_f;
-  float op3_f = this->dReg.op3_f;
-  int64_t offset = this->dReg.offset;
-  bool predictedBranch = this->dReg.predictedBranch;
-  RegType rs1_reg_type = this->dReg.rs1_reg_type;
-  RegType rs2_reg_type = this->dReg.rs2_reg_type;
-  RegType rs3_reg_type = this->dReg.rs3_reg_type;
-  RegType rd_reg_type = this->dReg.rd_reg_type;
+  Inst inst = fu_status.inst;
+  int64_t op1 = fu_status.op1;
+  int64_t op2 = fu_status.op2;
+  float op1_f = fu_status.op1_f;
+  float op2_f = fu_status.op2_f;
+  float op3_f = fu_status.op3_f;
 
-  uint64_t dRegPC = this->dReg.pc;
+  if (fu_status.rs1_type == RegType::INT) {
+    op1 = reg[fu_status.rs1];
+  } else if (fu_status.rs1_type == RegType::FLOAT) {
+    op1_f = reg_f[fu_status.rs1];
+  }
+
+  if (fu_status.rs2_type == RegType::INT) {
+    op2 = reg[fu_status.rs2];
+  } else if (fu_status.rs2_type == RegType::FLOAT) {
+    op2_f = reg_f[fu_status.rs2];
+  }
+
+  if (fu_status.rs3_type == RegType::FLOAT) {
+    op3_f = reg_f[fu_status.rs3];
+  }
+
+  int64_t offset = fu_status.offset;
+  // bool predictedBranch = this->dReg.predictedBranch;
+  RegType rs1_reg_type = fu_status.rs1_type;
+  RegType rs2_reg_type = fu_status.rs2_type;
+  RegType rs3_reg_type = fu_status.rs3_type;
+  RegType rd_reg_type = fu_status.rd_type;
+
+  uint64_t dRegPC = fu_status.pc;
+
   bool writeReg = false;
-  RegId destReg = this->dReg.dest;
+  RegId destReg = fu_status.rd;
   int64_t out = 0;
   float out_f = 0.0f;
   bool writeMem = false;
@@ -1299,21 +1331,20 @@ void Simulator::excecute() {
 
   // Pipeline Related Code
   if (isBranch(inst)) {
-    if (predictedBranch == branch) {
-      this->history.predictedBranch++;
-    } else {
-      // Control Hazard Here
-      // ! Bug fix
-      if (branch)
-        this->pc = dRegPC;
-      else
-        this->pc = dReg.pc + 4;
-      // ! Bug fix end
-      this->fRegNew.bubble = true;
-      this->dRegNew.bubble = true;
-      this->history.unpredictedBranch++;
-      this->history.controlHazardCount++;
-    }
+
+    // Control Hazard Here
+    // ! Bug fix
+    if (branch)
+      this->pc = dRegPC;
+    else
+      this->pc = fu_status.pc + 4;
+    // ! Bug fix end
+    this->fRegNew.bubble = true;
+    this->dRegNew.bubble = true;
+    this->fReg.stall = 0;
+    this->dReg.stall = 0;
+    this->history.unpredictedBranch++;
+    this->history.controlHazardCount++;
     // this->dReg.pc: fetch original inst addr, not the modified one
     // ! this->branchPredictor->update(this->dReg.pc, branch);
   }
@@ -1322,133 +1353,10 @@ void Simulator::excecute() {
     this->pc = dRegPC;
     this->fRegNew.bubble = true;
     this->dRegNew.bubble = true;
+    this->fReg.stall = 0;
+    this->dReg.stall = 0;
     this->history.controlHazardCount++;
   }
-  if (isReadMem(inst) && (destReg != 0 || rd_reg_type == RegType::FLOAT)) {
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
-                 this->dRegNew.rs1) ||
-        same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
-                 this->dRegNew.rs2) ||
-        same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
-                 this->dRegNew.rs3)) {
-      this->fRegNew.stall = 2;
-      this->dRegNew.stall = 2;
-      this->eRegNew.bubble = true;
-      this->history.cycleCount--;
-      this->history.memoryHazardCount++;
-    }
-  }
-
-  // inside the execute stage, there's ALU and other components
-  // latency analysis of each instruction inside execute stage
-  uint32_t lat = this->latency[getComponentUsed(inst)];
-  // stall the fetch & decode stage to reflect the latency
-  this->fRegNew.stall = std::max<uint32_t>(lat, this->fRegNew.stall);
-  this->dRegNew.stall = std::max<uint32_t>(lat, this->dRegNew.stall);
-  // ! ? this->eRegNew.bubble = true;
-  // Check for data hazard and forward data
-  if (writeReg && (destReg != 0 || rd_reg_type == RegType::FLOAT) &&
-      !isReadMem(inst)) {
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
-                 this->dRegNew.rs1)) {
-      if (rd_reg_type == RegType::INT) {
-        this->dRegNew.op1 = out;
-        this->executeWBRegType = RegType::INT;
-      } else if (rd_reg_type == RegType::FLOAT) {
-        this->dRegNew.op1_f = out_f;
-        this->executeWBRegType = RegType::FLOAT;
-      }
-      this->executeWBReg = destReg;
-      this->executeWriteBack = true;
-      this->history.dataHazardCount++;
-      if (verbose)
-        printf("  Forward Data %s to Decode op1\n", REGNAME[destReg]);
-    }
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
-                 this->dRegNew.rs2)) {
-      if (rd_reg_type == RegType::INT) {
-        this->dRegNew.op2 = out;
-        this->executeWBRegType = RegType::INT;
-      } else if (rd_reg_type == RegType::FLOAT) {
-        this->dRegNew.op2_f = out_f;
-        this->executeWBRegType = RegType::FLOAT;
-      }
-      this->executeWBReg = destReg;
-      this->executeWriteBack = true;
-      this->history.dataHazardCount++;
-      if (verbose)
-        printf("  Forward Data %s to Decode op2\n", REGNAME[destReg]);
-    }
-    // ! rs3_reg_type is RegType::INVALID if it does not exist
-    // ! should switch to more reasonable implemention
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
-                 this->dRegNew.rs3)) {
-      if (rd_reg_type == RegType::FLOAT) {
-        this->dRegNew.op3_f = out_f;
-        this->executeWBRegType = RegType::FLOAT;
-      }
-      this->executeWBReg = destReg;
-      this->executeWriteBack = true;
-      this->history.dataHazardCount++;
-      if (verbose)
-        printf("  Forward Data %s to Decode op3\n", REGNAME[destReg]);
-    }
-  }
-
-  this->eRegNew.bubble = false;
-  this->eRegNew.stall = false;
-  this->eRegNew.pc = dRegPC;
-  this->eRegNew.inst = inst;
-  this->eRegNew.op1 = op1; // for jalr
-  this->eRegNew.op2 = op2; // for store
-  this->eRegNew.op2_f = op2_f;
-  this->eRegNew.writeReg = writeReg;
-  this->eRegNew.destReg = destReg;
-  this->eRegNew.out = out;
-  this->eRegNew.out_f = out_f;
-  this->eRegNew.writeMem = writeMem;
-  this->eRegNew.readMem = readMem;
-  this->eRegNew.readSignExt = readSignExt;
-  this->eRegNew.memLen = memLen;
-  this->eRegNew.branch = branch;
-  this->eRegNew.rs1_reg_type = rs1_reg_type;
-  this->eRegNew.rs2_reg_type = rs2_reg_type;
-  this->eRegNew.rs3_reg_type = rs3_reg_type;
-  this->eRegNew.rd_reg_type = rd_reg_type;
-}
-
-void Simulator::memoryAccess() {
-  if (this->eReg.stall) {
-    if (verbose) {
-      printf("Memory Access: Stall\n");
-    }
-    return;
-  }
-  if (this->eReg.bubble) {
-    if (verbose) {
-      printf("Memory Access: Bubble\n");
-    }
-    this->mRegNew.bubble = true;
-    return;
-  }
-
-  uint64_t eRegPC = this->eReg.pc;
-  Inst inst = this->eReg.inst;
-  bool writeReg = this->eReg.writeReg;
-  RegId destReg = this->eReg.destReg;
-  int64_t op1 = this->eReg.op1; // for jalr
-  int64_t op2 = this->eReg.op2; // for store
-  int64_t out = this->eReg.out;
-  float op2_f = this->eReg.op2_f;
-  float out_f = this->eReg.out_f;
-  bool writeMem = this->eReg.writeMem;
-  bool readMem = this->eReg.readMem;
-  bool readSignExt = this->eReg.readSignExt;
-  uint32_t memLen = this->eReg.memLen;
-  RegType rs1_reg_type = this->eReg.rs1_reg_type;
-  RegType rs2_reg_type = this->eReg.rs2_reg_type;
-  RegType rs3_reg_type = this->eReg.rs3_reg_type;
-  RegType rd_reg_type = this->eReg.rd_reg_type;
 
   bool good = true;
   uint32_t cycles = 0;
@@ -1519,246 +1427,31 @@ void Simulator::memoryAccess() {
     }
   }
 
-  if (this->fReg.stall == datamem_stall_lock)
-    this->fReg.stall = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
-  if (this->dReg.stall == datamem_stall_lock)
-    this->dReg.stall = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
+  new_fu_status.out = out;
+  new_fu_status.out_f = out_f;
 
-  if (verbose) {
-    printf("Memory Access: %s\n", INSTNAME[inst]);
-  }
-
-  // Check for data hazard and forward data
-  if (writeReg && (destReg != 0 || rd_reg_type == RegType::FLOAT)) {
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
-                 this->dRegNew.rs1)) {
-      // Avoid overwriting recent values
-      if (this->executeWriteBack == false ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (rd_reg_type == RegType::INT) {
-          this->dRegNew.op1 = out;
-          this->memoryWBRegType = RegType::INT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op1\n", REGNAME[destReg]);
-        } else if (rd_reg_type == RegType::FLOAT) {
-          this->dRegNew.op1_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op1\n", REGNAME_F[destReg]);
-        }
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-      }
-    }
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
-                 this->dRegNew.rs2)) {
-      // Avoid overwriting recent values
-      if (this->executeWriteBack == false ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (rd_reg_type == RegType::INT) {
-          this->dRegNew.op2 = out;
-          this->memoryWBRegType = RegType::INT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op2\n", REGNAME[destReg]);
-        } else if (rd_reg_type == RegType::FLOAT) {
-          this->dRegNew.op2_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op2\n", REGNAME_F[destReg]);
-        }
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-      }
-    }
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
-                 this->dRegNew.rs3)) {
-      // Avoid overwriting recent values
-      if (this->executeWriteBack == false ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (rd_reg_type == RegType::FLOAT) {
-          this->dRegNew.op3_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-        }
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-        if (verbose)
-          printf("  Forward Data %s to Decode op3\n", REGNAME_F[destReg]);
-      }
-    }
-
-    // Corner case of forwarding mem load data to stalled decode reg
-    // ! ------------------------MAYBE-A-BUG------------------------
-    if (this->dReg.stall && readMem) {
-      if (same_reg(rd_reg_type, destReg, this->dReg.rs1_reg_type,
-                   this->dReg.rs1)) {
-        if (rd_reg_type == RegType::INT) {
-          this->dReg.op1 = out;
-          this->memoryWBRegType = RegType::INT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op1\n", REGNAME[destReg]);
-        } else if (rd_reg_type == RegType::FLOAT) {
-          this->dReg.op1_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op1\n", REGNAME_F[destReg]);
-        }
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-      }
-      if (same_reg(rd_reg_type, destReg, this->dReg.rs2_reg_type,
-                   this->dReg.rs2)) {
-        if (rd_reg_type == RegType::INT) {
-          this->dReg.op2 = out;
-          this->memoryWBRegType = RegType::INT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op2\n", REGNAME[destReg]);
-        } else if (rd_reg_type == RegType::FLOAT) {
-          this->dReg.op2_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-          if (verbose)
-            printf("  Forward Data %s to Decode op2\n", REGNAME_F[destReg]);
-        }
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-      }
-      if (same_reg(rd_reg_type, destReg, this->dReg.rs3_reg_type,
-                   this->dReg.rs3)) {
-        if (rd_reg_type == RegType::FLOAT) {
-          this->dReg.op3_f = out_f;
-          this->memoryWBRegType = RegType::FLOAT;
-        }
-        if (verbose)
-          printf("  Forward Data %s to Decode op3\n", REGNAME_F[destReg]);
-        this->memoryWriteBack = true;
-        this->memoryWBReg = destReg;
-        this->history.dataHazardCount++;
-      }
-    }
-  }
-
-  this->mRegNew.bubble = false;
-  this->mRegNew.stall = false;
-  this->mRegNew.pc = eRegPC;
-  this->mRegNew.inst = inst;
-  this->mRegNew.op1 = op1;
-  this->mRegNew.op2 = op2;
-  this->mRegNew.destReg = destReg;
-  this->mRegNew.writeReg = writeReg;
-  this->mRegNew.out = out;
-  this->mRegNew.out_f = out_f;
-  this->mRegNew.rs1_reg_type = rs1_reg_type;
-  this->mRegNew.rs2_reg_type = rs2_reg_type;
-  this->mRegNew.rs3_reg_type = rs3_reg_type;
-  this->mRegNew.rd_reg_type = rd_reg_type;
+  if (fu_status.timeout == datamem_stall_lock)
+    new_fu_status.timeout = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
 }
 
-void Simulator::writeBack() {
-  if (this->mReg.stall) {
-    if (verbose) {
-      printf("WriteBack: stall\n");
-    }
-    return;
-  }
-  if (this->mReg.bubble) {
-    if (verbose) {
-      printf("WriteBack: Bubble\n");
-    }
-    return;
-  }
+void Simulator::writeBack(FUStatus &fu_status) {
 
   if (verbose) {
-    printf("WriteBack: %s\n", INSTNAME[this->mReg.inst]);
+    printf("WriteBack: %s\n", INSTNAME[fu_status.inst]);
   }
 
-  RegId destReg = mReg.destReg;
-  RegType rd_reg_type = this->mReg.rd_reg_type;
+  RegId rd = fu_status.rd;
+  RegType rd_type = fu_status.rd_type;
 
-  if (this->mReg.writeReg &&
-      (this->mReg.destReg != 0 || rd_reg_type == RegType::FLOAT)) {
-    // Check for data hazard and forward data
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs1_reg_type,
-                 this->dRegNew.rs1)) {
-      // Avoid overwriting recent data
-      if (!this->executeWriteBack ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (!this->memoryWriteBack ||
-            (this->memoryWriteBack &&
-             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
-                       this->memoryWBReg))) {
-          if (rd_reg_type == RegType::INT)
-            this->dRegNew.op1 = this->mReg.out;
-          else if (rd_reg_type == RegType::FLOAT)
-            this->dRegNew.op1_f = this->mReg.out_f;
+  if (verbose)
+    printf("%d: %d %f\n", rd, fu_status.out, fu_status.out_f);
 
-          this->history.dataHazardCount++;
-          if (verbose)
-            printf("  Forward Data %s to Decode op1\n",
-                   REGNAME[this->mReg.destReg]);
-        }
-      }
-    }
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs2_reg_type,
-                 this->dRegNew.rs2)) {
-      // Avoid overwriting recent data
-      if (!this->executeWriteBack ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (!this->memoryWriteBack ||
-            (this->memoryWriteBack &&
-             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
-                       this->memoryWBReg))) {
-          if (rd_reg_type == RegType::INT)
-            this->dRegNew.op2 = this->mReg.out;
-          else if (rd_reg_type == RegType::FLOAT)
-            this->dRegNew.op2_f = this->mReg.out_f;
-
-          this->history.dataHazardCount++;
-          if (verbose)
-            printf("  Forward Data %s to Decode op2\n",
-                   REGNAME[this->mReg.destReg]);
-        }
-      }
-    }
-    if (same_reg(rd_reg_type, destReg, this->dRegNew.rs3_reg_type,
-                 this->dRegNew.rs3)) {
-      // Avoid overwriting recent data
-      if (!this->executeWriteBack ||
-          (this->executeWriteBack &&
-           !same_reg(rd_reg_type, destReg, this->executeWBRegType,
-                     this->executeWBReg))) {
-        if (!this->memoryWriteBack ||
-            (this->memoryWriteBack &&
-             !same_reg(rd_reg_type, destReg, this->memoryWBRegType,
-                       this->memoryWBReg))) {
-          this->dRegNew.op3_f = this->mReg.out_f;
-
-          this->history.dataHazardCount++;
-          if (verbose)
-            printf("  Forward Data %s to Decode op3\n",
-                   REGNAME_F[this->mReg.destReg]);
-        }
-      }
-    }
-
+  if (rd > 0 || rd_type == RegType::FLOAT) {
     // Real Write Back
-    if (rd_reg_type == RegType::INT) {
-      this->reg[this->mReg.destReg] = this->mReg.out;
-    } else if (rd_reg_type == RegType::FLOAT) {
-      this->reg_f[this->mReg.destReg] = this->mReg.out_f;
+    if (rd_type == RegType::INT) {
+      this->reg[rd] = fu_status.out;
+    } else if (rd_type == RegType::FLOAT) {
+      this->reg_f[rd] = fu_status.out_f;
     }
   }
 

@@ -32,7 +32,8 @@ MemoryManager memory;
 Cache *l1Cache, *l2Cache, *l3Cache;
 BranchPredictor::Strategy strategy = BranchPredictor::Strategy::NT;
 BranchPredictor branchPredictor;
-Simulator simulator(&memory, &branchPredictor);
+
+RISCV::Simulator simulator(&memory, &branchPredictor);
 
 int main(int argc, char **argv) {
   std::feclearexcept(FE_ALL_EXCEPT);
