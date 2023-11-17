@@ -19,3 +19,4 @@ sanity/dump.txt
 sanity/matrixmulti.c
 sanity/my.S
 sanity/log
+sanity/cholesky.c
