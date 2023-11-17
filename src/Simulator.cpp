@@ -1519,22 +1519,19 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
-  if (verbose) {
-    printf("------------ STATISTICS -----------\n");
-    printf("Number of Instructions: %u\n", this->history.instCount);
-    printf("Number of Cycles: %u\n", this->history.cycleCount);
-    printf("Avg Cycles per Instrcution: %.4f\n",
-           (float)this->history.cycleCount / this->history.instCount);
-    printf(
-        "Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
-        (float)this->history.predictedBranch /
-            (this->history.predictedBranch + this->history.unpredictedBranch),
-        this->branchPredictor->strategyName().c_str());
-    printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
-    printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
-    printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
-    printf("-----------------------------------\n");
-  }
+  printf("------------ STATISTICS -----------\n");
+  printf("Number of Instructions: %u\n", this->history.instCount);
+  printf("Number of Cycles: %u\n", this->history.cycleCount);
+  printf("Avg Cycles per Instrcution: %.4f\n",
+         (float)this->history.cycleCount / this->history.instCount);
+  printf("Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
+         (float)this->history.predictedBranch /
+             (this->history.predictedBranch + this->history.unpredictedBranch),
+         this->branchPredictor->strategyName().c_str());
+  printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
+  printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
+  printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
+  printf("-----------------------------------\n");
   // this->memory->printStatistics();
 }
 
