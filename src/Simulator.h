@@ -700,11 +700,7 @@ private:
         scoreboardNew.fu_status[fmaAdd].timeout = -1;
       }
 
-      /* "Branch instructions hold up the issuing of further instructions until
-         they have completed."
-         https://www.icsa.inf.ed.ac.uk/research/groups/hase/models/6600/index.html
-      */
-      // ! TODO stall fetch & decode for branch
+      // * stall fetch & decode for branch / jump
       if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
         f_reg.stall = datamem_stall_lock;
         d_reg.stall = datamem_stall_lock;
