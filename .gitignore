@@ -20,3 +20,4 @@ sanity/matrixmulti.c
 sanity/my.S
 sanity/log
 sanity/cholesky.c
+sanity/quicksort.c
