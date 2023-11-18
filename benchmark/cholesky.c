@@ -1,3 +1,10 @@
+/*
+*************************************************************
+
+Reference: https://en.wikipedia.org/wiki/Cholesky_decomposition
+
+*************************************************************
+*/
 #include "lib.h"
 #include <math.h>
 #define N 192

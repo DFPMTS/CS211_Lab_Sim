@@ -1,3 +1,10 @@
+/*
+*************************************************************
+
+  Modified from test/quicksort.c in the startup codebase.
+
+*************************************************************
+*/
 #include "lib.h"
 
 void quicksort(int *a, int begin, int end) {

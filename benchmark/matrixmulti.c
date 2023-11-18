@@ -1,3 +1,10 @@
+/*
+*************************************************************
+
+  Modified from test/matrixmulti.c in the startup codebase.
+
+*************************************************************
+*/
 #include "lib.h"
 
 const int M = 32;
