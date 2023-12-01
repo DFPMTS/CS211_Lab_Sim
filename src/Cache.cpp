@@ -62,7 +62,8 @@ uint8_t Cache::getByte(uint32_t addr, uint32_t *cycles) {
     this->statistics.numHit++;
     this->statistics.totalCycles += this->policy.hitLatency;
     this->blocks[blockId].lastReference = this->referenceCounter;
-    if (cycles) *cycles = this->policy.hitLatency;
+    if (cycles)
+      *cycles = this->policy.hitLatency;
     return this->blocks[blockId].data[offset];
   }
 
@@ -99,7 +100,8 @@ void Cache::setByte(uint32_t addr, uint8_t val, uint32_t *cycles) {
       this->writeBlockToLowerLevel(this->blocks[blockId]);
       this->statistics.totalCycles += this->policy.missLatency;
     }
-    if (cycles) *cycles = this->policy.hitLatency;
+    if (cycles)
+      *cycles = this->policy.hitLatency;
     return;
   }
 
@@ -221,8 +223,9 @@ void Cache::loadBlockFromLowerLevel(uint32_t addr, uint32_t *cycles) {
   for (uint32_t i = blockAddrBegin; i < blockAddrBegin + blockSize; ++i) {
     if (this->lowerCache == nullptr) {
       b.data[i - blockAddrBegin] = this->memory->getByteNoCache(i);
-      if (cycles) *cycles = 100;
-    } else 
+      if (cycles)
+        *cycles = 100;
+    } else
       b.data[i - blockAddrBegin] = this->lowerCache->getByte(i, cycles);
   }
 
@@ -291,7 +294,7 @@ uint32_t Cache::log2i(uint32_t val) {
 uint32_t Cache::getTag(uint32_t addr) {
   uint32_t offsetBits = log2i(policy.blockSize);
   uint32_t idBits = log2i(policy.blockNum / policy.associativity);
-  uint32_t mask = (1 << (32 - offsetBits - idBits)) - 1;
+  uint32_t mask = (1ULL << (32 - offsetBits - idBits)) - 1;
   return (addr >> (offsetBits + idBits)) & mask;
 }
 

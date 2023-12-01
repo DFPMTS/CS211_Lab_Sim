@@ -31,4 +31,12 @@ add_executable(
     src/Cache.cpp
 )
 
+add_executable(
+    Proj2
+    src/Project2.cpp
+    src/MemoryManager.cpp
+    src/CacheLayer.cpp
+    src/L1L2Cache.cpp
+)   
+
 add_executable(ToDirenoTrace src/ToDirenoTrace.cpp)

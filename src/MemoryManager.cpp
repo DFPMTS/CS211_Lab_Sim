@@ -201,7 +201,7 @@ void MemoryManager::printInfo() {
 
 void MemoryManager::printStatistics() {
   printf("---------- CACHE STATISTICS ----------\n");
-  this->cache->printStatistics();
+  // this->cache->printStatistics();
 }
 
 std::string MemoryManager::dumpMemory() {
@@ -252,4 +252,4 @@ bool MemoryManager::isAddrExist(uint32_t addr) {
   return false;
 }
 
-void MemoryManager::setCache(Cache *cache) { this->cache = cache; }
+void MemoryManager::setCache(L1L2Cache *cache) { this->cache = cache; }

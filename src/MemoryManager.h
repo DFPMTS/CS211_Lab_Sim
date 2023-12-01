@@ -11,12 +11,12 @@
 
 #include <elfio/elfio.hpp>
 
-#include "Cache.h"
+// #include "Cache.h"
+#include "L1L2Cache.hpp"
 
-class Cache;
+class L1L2Cache;
 
-class MemoryManager
-{
+class MemoryManager {
 public:
   MemoryManager();
   ~MemoryManager();
@@ -45,7 +45,9 @@ public:
 
   std::string dumpMemory();
 
-  void setCache(Cache *cache);  
+  void setCache(L1L2Cache *cache);
+
+  uint8_t **memory[1024];
 
 private:
   uint32_t getFirstEntryId(uint32_t addr);
@@ -53,8 +55,7 @@ private:
   uint32_t getPageOffset(uint32_t addr);
   bool isAddrExist(uint32_t addr);
 
-  uint8_t **memory[1024];
-  Cache *cache;
+  L1L2Cache *cache;
 };
 
 #endif
