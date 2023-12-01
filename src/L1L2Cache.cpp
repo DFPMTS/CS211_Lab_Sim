@@ -10,6 +10,20 @@ uint8_t L1L2Cache::getByte(uint32_t addr, uint32_t *cycles) {
     return L1_val;
   }
 
+  // * victim
+  if (victim_cache) {
+    auto [victim_val, victim_hit] = victim_cache->getByte(addr, cycles);
+    if (victim_hit) {
+      auto victim_moved_block = victim_cache->moveBlock(addr);
+      auto L1_evicted_block = L1_cache.installBlock(victim_moved_block);
+      if (L1_evicted_block.has_value()) {
+        L1_process_evicted(*L1_evicted_block);
+      }
+
+      return victim_val;
+    }
+  }
+
   // * L2
   stat.L1_Miss++;
   stat.L2_Reference++;
@@ -83,7 +97,16 @@ void L1L2Cache::setByte(uint32_t addr, uint8_t val, uint32_t *cycles) {
   assert(L1_cache.setByte(addr, val, NULL));
 }
 
-void L1L2Cache::L1_process_evicted(Block block) { L1_writeback(block); }
+void L1L2Cache::L1_process_evicted(Block block) {
+  if (victim_cache) {
+    // * evict into victim cache
+    auto victim_evicted_block = victim_cache->installBlock(block);
+    if (victim_evicted_block.has_value()) {
+      block = *victim_evicted_block;
+    }
+  }
+  L1_writeback(block);
+}
 
 void L1L2Cache::L1_writeback(Block block) {
   assert(block.valid);
@@ -104,7 +127,6 @@ void L1L2Cache::L1_writeback(Block block) {
     }
   } else if (inclusion_policy == Exclusive) {
     // * Exclusive
-    std::cerr << "L2-";
     auto L2_evicted_block = L2_cache.installBlock(block);
     if (L2_evicted_block.has_value()) {
       L2_writeback(*L2_evicted_block);
