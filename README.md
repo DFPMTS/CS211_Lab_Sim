@@ -11,15 +11,24 @@ make
 ## New targets:
 
 Section1: used to generate results for Section 1 
+
+
 Section2: used to generate results for Section 2 
+
+
 Section3: used to generate results for Section 3
+
 
 ## Modified targets:
 Simulator: now use our modified L1L2Cache
 
+
 ## Removed targets:
 CacheSim
-CacheSimOptimized
+
+
+CacheOptimized
+
 
 ## Testcases
 in 
