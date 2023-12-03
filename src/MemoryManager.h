@@ -49,13 +49,13 @@ public:
 
   uint8_t **memory[1024];
 
+  L1L2Cache *cache;
+
 private:
   uint32_t getFirstEntryId(uint32_t addr);
   uint32_t getSecondEntryId(uint32_t addr);
   uint32_t getPageOffset(uint32_t addr);
   bool isAddrExist(uint32_t addr);
-
-  L1L2Cache *cache;
 };
 
 #endif

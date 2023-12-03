@@ -14,29 +14,41 @@ add_executable(
     src/MemoryManager.cpp 
     src/Simulator.cpp 
     src/BranchPredictor.cpp 
-    src/Cache.cpp
+    src/L1L2Cache.cpp
+    src/CacheLayer.cpp
 )
 
 add_executable(
-    CacheSim 
-    src/MainCache.cpp 
-    src/MemoryManager.cpp 
-    src/Cache.cpp
-)
-
-add_executable(
-    CacheOptimized
-    src/MainCacheOptimization.cpp
-    src/MemoryManager.cpp
-    src/Cache.cpp
-)
-
-add_executable(
-    Proj2
-    src/Project2.cpp
+    Sanity
+    src/Sanity.cpp
     src/MemoryManager.cpp
     src/CacheLayer.cpp
     src/L1L2Cache.cpp
 )   
+
+add_executable(
+    Section1
+    src/Section1.cpp
+    src/MemoryManager.cpp
+    src/CacheLayer.cpp
+    src/L1L2Cache.cpp
+)   
+
+add_executable(
+    Section2
+    src/Section2.cpp
+    src/MemoryManager.cpp
+    src/CacheLayer.cpp
+    src/L1L2Cache.cpp
+)   
+
+add_executable(
+    Section3
+    src/Section3.cpp
+    src/MemoryManager.cpp
+    src/CacheLayer.cpp
+    src/L1L2Cache.cpp
+)   
+
 
 add_executable(ToDirenoTrace src/ToDirenoTrace.cpp)

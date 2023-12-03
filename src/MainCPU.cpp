@@ -12,8 +12,8 @@
 #include <elfio/elfio.hpp>
 
 #include "BranchPredictor.h"
-#include "Cache.h"
 #include "Debug.h"
+#include "L1L2Cache.hpp"
 #include "MemoryManager.h"
 #include "Simulator.h"
 
@@ -27,9 +27,9 @@ bool verbose = 0;
 bool isSingleStep = 0;
 bool dumpHistory = 0;
 uint32_t stackBaseAddr = 0x80000000;
-uint32_t stackSize = 0x400000;
+uint32_t stackSize = 0x10000;
 MemoryManager memory;
-Cache *l1Cache, *l2Cache, *l3Cache;
+// Cache *l1Cache, *l2Cache, *l3Cache;
 BranchPredictor::Strategy strategy = BranchPredictor::Strategy::NT;
 BranchPredictor branchPredictor;
 Simulator simulator(&memory, &branchPredictor);
@@ -42,34 +42,67 @@ int main(int argc, char **argv) {
   }
 
   // Init cache
-  Cache::Policy l1Policy, l2Policy, l3Policy;
+  // Cache::Policy l1Policy, l2Policy, l3Policy;
 
-  l1Policy.cacheSize = 32 * 1024;
-  l1Policy.blockSize = 64;
-  l1Policy.blockNum = l1Policy.cacheSize / l1Policy.blockSize;
-  l1Policy.associativity = 8;
-  l1Policy.hitLatency = 0;
-  l1Policy.missLatency = 8;
+  // l1Policy.cacheSize = 32 * 1024;
+  // l1Policy.blockSize = 64;
+  // l1Policy.blockNum = l1Policy.cacheSize / l1Policy.blockSize;
+  // l1Policy.associativity = 8;
+  // l1Policy.hitLatency = 0;
+  // l1Policy.missLatency = 8;
 
-  l2Policy.cacheSize = 256 * 1024;
-  l2Policy.blockSize = 64;
-  l2Policy.blockNum = l2Policy.cacheSize / l2Policy.blockSize;
-  l2Policy.associativity = 8;
-  l2Policy.hitLatency = 8;
-  l2Policy.missLatency = 20;
+  // l2Policy.cacheSize = 256 * 1024;
+  // l2Policy.blockSize = 64;
+  // l2Policy.blockNum = l2Policy.cacheSize / l2Policy.blockSize;
+  // l2Policy.associativity = 8;
+  // l2Policy.hitLatency = 8;
+  // l2Policy.missLatency = 20;
 
-  l3Policy.cacheSize = 8 * 1024 * 1024;
-  l3Policy.blockSize = 64;
-  l3Policy.blockNum = l3Policy.cacheSize / l3Policy.blockSize;
-  l3Policy.associativity = 8;
-  l3Policy.hitLatency = 20;
-  l3Policy.missLatency = 100;
+  // l3Policy.cacheSize = 8 * 1024 * 1024;
+  // l3Policy.blockSize = 64;
+  // l3Policy.blockNum = l3Policy.cacheSize / l3Policy.blockSize;
+  // l3Policy.associativity = 8;
+  // l3Policy.hitLatency = 20;
+  // l3Policy.missLatency = 100;
 
-  l3Cache = new Cache(&memory, l3Policy);
-  l2Cache = new Cache(&memory, l2Policy, l3Cache);
-  l1Cache = new Cache(&memory, l1Policy, l2Cache);
+  // l3Cache = new Cache(&memory, l3Policy);
+  // l2Cache = new Cache(&memory, l2Policy, l3Cache);
+  // l1Cache = new Cache(&memory, l1Policy, l2Cache);
 
-  memory.setCache(l1Cache);
+  int cacheline_size = 32;
+  int l1_blocks = 32;
+  int l2_blocks = 128;
+  int l1_assoc = 4;
+  int l2_assoc = 4;
+
+  int l1_replacement_policy = 0;
+  int l2_replacement_policy = 0;
+  int inclusion_policy = 2;
+
+  if (l1_replacement_policy == CacheLayer::ReplacementPolicy::LRU) {
+    std::cerr << "L1:        LRU\n";
+  } else if (l1_replacement_policy == CacheLayer::ReplacementPolicy::SRRIP) {
+    std::cerr << "L1:        RRIP\n";
+  }
+  if (l2_replacement_policy == CacheLayer::ReplacementPolicy::LRU) {
+    std::cerr << "L2:        LRU\n";
+  } else if (l2_replacement_policy == CacheLayer::ReplacementPolicy::SRRIP) {
+    std::cerr << "L2:        RRIP\n";
+  }
+
+  if (inclusion_policy == L1L2Cache::InclusionPolicy::Inclusive) {
+    std::cerr << "Inclusion: Inclusive\n";
+  } else if (inclusion_policy == L1L2Cache::InclusionPolicy::Exclusive) {
+    std::cerr << "Inclusion: Exclusive\n";
+  } else if (inclusion_policy == L1L2Cache::InclusionPolicy::NINE) {
+    std::cerr << "Inclusion: Non-Inclusive\n";
+  }
+
+  CacheWrapper wrapper;
+  auto cache = wrapper.getCache(
+      &memory, cacheline_size, l1_blocks, l1_assoc, l2_blocks, l2_assoc, true,
+      8, l1_replacement_policy, l2_replacement_policy, inclusion_policy);
+  memory.setCache(cache);
 
   // Read ELF file
   ELFIO::elfio reader;
@@ -101,9 +134,9 @@ int main(int argc, char **argv) {
     simulator.dumpHistory();
   }
 
-  delete l1Cache;
-  delete l2Cache;
-  delete l3Cache;
+  // delete l1Cache;
+  // delete l2Cache;
+  // delete l3Cache;
   return 0;
 }
 

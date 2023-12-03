@@ -3,8 +3,7 @@
 #include <cstdio>
 #include <optional>
 
-CacheLayer::CacheLayer(MemoryManager *memory, Policy policy, bool writeBack,
-                       bool writeAllocate) {
+CacheLayer::CacheLayer(MemoryManager *memory, Policy policy) {
   this->referenceCounter = 0;
   this->policy = policy;
   this->memory = memory;
@@ -18,8 +17,6 @@ CacheLayer::CacheLayer(MemoryManager *memory, Policy policy, bool writeBack,
   this->statistics.numHit = 0;
   this->statistics.numMiss = 0;
   this->statistics.totalCycles = 0;
-  this->writeBack = writeBack;
-  this->writeAllocate = writeAllocate;
 }
 
 bool CacheLayer::inCache(uint32_t addr) {
@@ -30,13 +27,14 @@ std::pair<uint8_t, bool> CacheLayer::getByte(uint32_t addr, uint32_t *cycles) {
   this->referenceCounter++;
   this->statistics.numRead++;
 
+  this->statistics.totalCycles += this->policy.hitLatency;
   // Hit
   int blockId;
   if ((blockId = this->getBlockId(addr)) != -1) {
     uint32_t offset = this->getOffset(addr);
     this->statistics.numHit++;
-    this->statistics.totalCycles += this->policy.hitLatency;
     this->blocks[blockId].lastReference = this->referenceCounter;
+    this->blocks[blockId].RRPV = 0;
     if (cycles)
       *cycles = this->policy.hitLatency;
     return std::make_pair(this->blocks[blockId].data[offset], true);
@@ -71,15 +69,16 @@ bool CacheLayer::setByte(uint32_t addr, uint8_t val, uint32_t *cycles) {
   this->referenceCounter++;
   this->statistics.numWrite++;
 
+  this->statistics.totalCycles += this->policy.hitLatency;
   // Hit
   int blockId;
   if ((blockId = this->getBlockId(addr)) != -1) {
     uint32_t offset = this->getOffset(addr);
     this->statistics.numHit++;
-    this->statistics.totalCycles += this->policy.hitLatency;
     this->blocks[blockId].modified = true;
     this->blocks[blockId].lastReference = this->referenceCounter;
     this->blocks[blockId].data[offset] = val;
+    this->blocks[blockId].RRPV = 0;
     if (cycles)
       *cycles = this->policy.hitLatency;
     return true;
@@ -93,13 +92,14 @@ bool CacheLayer::setByte(uint32_t addr, uint8_t val, uint32_t *cycles) {
 Block CacheLayer::fetchBlock(uint32_t addr) {
   auto block_id = this->getBlockId(addr);
   assert(block_id != -1);
+  // * fetch/move's latency has already been counted in get/setByte
   return this->blocks[block_id];
 }
 
 Block CacheLayer::moveBlock(uint32_t addr) {
   auto block_id = this->getBlockId(addr);
   assert(block_id != -1);
-
+  // * fetch/move's latency has already been counted in get/setByte
   auto block = this->blocks[block_id];
   this->blocks[block_id].valid = false;
   return block;
@@ -107,7 +107,7 @@ Block CacheLayer::moveBlock(uint32_t addr) {
 
 std::optional<Block> CacheLayer::loadBlockFromMemory(uint32_t addr) {
   uint32_t blockSize = this->policy.blockSize;
-  ++referenceCounter;
+  this->referenceCounter++;
   // Initialize new block from memory
   Block b;
   b.valid = true;
@@ -121,18 +121,19 @@ std::optional<Block> CacheLayer::loadBlockFromMemory(uint32_t addr) {
   uint32_t blockAddrBegin = addr & mask;
   b.addr = blockAddrBegin;
   b.lastReference = referenceCounter;
+  b.RRPV = (1 << this->policy.RRIP_M) - 2;
   for (uint32_t i = blockAddrBegin; i < blockAddrBegin + blockSize; ++i) {
     b.data[i - blockAddrBegin] = this->memory->getByteNoCache(i);
   }
-  // std::cerr << "Load block:\n";
-  // std::cerr << b.addr << " " << b.id << " " << b.tag << "\n";
+
+  // * hardcoding
+  this->statistics.totalCycles += 100;
+
   return this->installBlock(b);
 }
 
-std::optional<Block> CacheLayer::installBlock(Block block) {
-  // std::cerr << "Install block:\n";
-  // std::cerr << block.addr << " " << block.id << " " << block.tag << "\n";
-  ++referenceCounter;
+std::optional<Block> CacheLayer::installBlock(Block block, bool from_victim) {
+  this->referenceCounter++;
   auto addr = block.addr;
   auto index = this->getId(addr);
   auto tag = this->getTag(addr);
@@ -140,16 +141,21 @@ std::optional<Block> CacheLayer::installBlock(Block block) {
   block.tag = tag;
   block.id = index;
   block.lastReference = referenceCounter;
+  block.RRPV = (1 << this->policy.RRIP_M) - 2;
 
   auto set_begin_id = index * this->policy.associativity;
   auto set_end_id = (index + 1) * this->policy.associativity;
 
   auto evict_id = getReplacementBlockId(set_begin_id, set_end_id);
-  std::cerr << "evict:  " << evict_id << "\n";
+
   std::swap(block, this->blocks[evict_id]);
-  std::cerr << "valid:  " << this->blocks[evict_id].valid << "\n";
-  // auto ret_block = this->blocks[evict_id];
-  // this->blocks[evict_id] = block;
+
+  if (from_victim) {
+    this->statistics.totalCycles += this->policy.hitLatency;
+  } else {
+    this->statistics.totalCycles += this->policy.missLatency;
+  }
+
   if (block.valid) {
     return block;
   } else {
@@ -159,6 +165,7 @@ std::optional<Block> CacheLayer::installBlock(Block block) {
 
 bool CacheLayer::updateBlock(Block block) {
   int id = this->getBlockId(block.addr);
+  this->statistics.totalCycles += this->policy.hitLatency;
   if (id == -1) {
     return false;
   }
@@ -172,8 +179,9 @@ bool CacheLayer::updateBlock(Block block) {
 }
 
 std::optional<Block> CacheLayer::invalidateBlock(uint32_t addr) {
-  std::cerr << "Invalidate!\n";
+
   auto id = this->getBlockId(addr);
+  this->statistics.totalCycles += this->policy.hitLatency;
   if (id == -1) {
     return std::nullopt;
   }
@@ -183,26 +191,55 @@ std::optional<Block> CacheLayer::invalidateBlock(uint32_t addr) {
 }
 
 uint32_t CacheLayer::getReplacementBlockId(uint32_t begin, uint32_t end) {
+  if (this->policy.replacement_policy == Optimal) {
+    assert(this->policy.next_ref);
+  }
   // Find invalid block first
   for (uint32_t i = begin; i < end; ++i) {
     if (!this->blocks[i].valid)
       return i;
   }
-
-  // Otherwise use LRU
   uint32_t resultId = begin;
-  uint32_t min = this->blocks[begin].lastReference;
-  for (uint32_t i = begin; i < end; ++i) {
-    if (this->blocks[i].lastReference < min) {
-      resultId = i;
-      min = this->blocks[i].lastReference;
+  if (this->policy.replacement_policy == LRU) {
+    uint32_t min = this->blocks[begin].lastReference;
+    for (uint32_t i = begin; i < end; ++i) {
+      if (this->blocks[i].lastReference < min) {
+        resultId = i;
+        min = this->blocks[i].lastReference;
+      }
+    }
+  } else if (this->policy.replacement_policy == SRRIP) {
+    bool found = false;
+    while (true) {
+      for (uint32_t i = begin; i < end; ++i) {
+        if (this->blocks[i].RRPV == (1 << this->policy.RRIP_M) - 1) {
+          resultId = i;
+          found = true;
+        }
+      }
+      if (found) {
+        break;
+      }
+      for (uint32_t i = begin; i < end; ++i) {
+        this->blocks[i].RRPV++;
+      }
+    }
+  } else if (this->policy.replacement_policy == Optimal) {
+    uint32_t max_next_ref = (*this->policy.next_ref)[this->blocks[begin].addr];
+    for (uint32_t i = begin; i < end; ++i) {
+      int next_ref = (*this->policy.next_ref)[this->blocks[i].addr];
+      if (next_ref > max_next_ref) {
+        resultId = i;
+        max_next_ref = next_ref;
+      }
     }
   }
   return resultId;
 }
 
 bool CacheLayer::isPolicyValid() {
-  if (!this->isPowerOfTwo(policy.cacheSize)) {
+  if (!this->isPowerOfTwo(policy.cacheSize) &&
+      policy.blockNum != policy.associativity) {
     fprintf(stderr, "Invalid Cache Size %d\n", policy.cacheSize);
     return false;
   }
@@ -237,9 +274,10 @@ void CacheLayer::printInfo(bool verbose) {
   if (verbose) {
     for (int j = 0; j < this->blocks.size(); ++j) {
       const Block &b = this->blocks[j];
-      printf("Block %d: tag 0x%x id %d %s %s (last ref %d)\n", j, b.tag, b.id,
-             b.valid ? "valid  " : "invalid",
-             b.modified ? "modified  " : "unmodified", b.lastReference);
+      printf("Block %d: addr %d tag 0x%x id %d %s %s (last ref %d) %d\n", j,
+             b.addr, b.tag, b.id, b.valid ? "valid  " : "invalid",
+             b.modified ? "modified  " : "unmodified", b.lastReference,
+             b.data[0]);
       // printf("Data: ");
       // for (uint8_t d : b.data)
       // printf("%d ", d);

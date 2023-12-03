@@ -1793,6 +1793,7 @@ int64_t Simulator::handleSystemCall(int64_t op1, int64_t op2) {
       this->dumpHistory();
     }
     this->printStatistics();
+
     exit(0);
   case 4: // read char
     scanf(" %c", (char *)&op1);
@@ -1826,6 +1827,16 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
+  std::cerr << "CPI:       "
+            << (double)this->history.cycleCount / this->history.instCount
+            << "\n";
+  auto cache = memory->cache;
+  auto AMAT = (double)((cache->stat.L1_Reference - cache->stat.Victim_Hit) * 2 +
+                       cache->stat.Victim_Hit * 1 + cache->stat.L1_Miss * 8 +
+                       cache->stat.L2_Miss * 100) /
+              cache->stat.L1_Reference;
+  std::cerr << "AMAT:      " << AMAT << "\n";
+
   if (verbose) {
     printf("------------ STATISTICS -----------\n");
     printf("Number of Instructions: %u\n", this->history.instCount);

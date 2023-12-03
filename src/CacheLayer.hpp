@@ -2,6 +2,7 @@
 
 #include "MemoryManager.h"
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -15,11 +16,14 @@ struct Block {
   uint32_t id;
   uint32_t size;
   uint32_t lastReference;
+  int RRPV;
   std::vector<uint8_t> data;
 };
 
 class CacheLayer {
 public:
+  enum ReplacementPolicy { LRU = 0, SRRIP = 1, Optimal = 2 };
+
   struct Policy {
     // In bytes, must be power of 2
     uint32_t cacheSize;
@@ -28,6 +32,9 @@ public:
     uint32_t associativity;
     uint32_t hitLatency;  // in cycles
     uint32_t missLatency; // in cycles
+    ReplacementPolicy replacement_policy = LRU;
+    uint32_t RRIP_M = 2;
+    std::map<uint32_t, uint32_t> *next_ref = NULL;
   };
 
   struct Statistics {
@@ -38,8 +45,7 @@ public:
     uint64_t totalCycles;
   };
 
-  CacheLayer(MemoryManager *memory, Policy policy, bool writeBack = true,
-             bool writeAllocate = true);
+  CacheLayer(MemoryManager *memory, Policy policy);
 
   bool inCache(uint32_t addr);
   uint32_t getBlockId(uint32_t addr);
@@ -60,7 +66,7 @@ public:
   Block moveBlock(uint32_t addr);
 
   // * install a block to cache, return the evicted cacheline if exists
-  std::optional<Block> installBlock(Block block);
+  std::optional<Block> installBlock(Block block, bool from_victim = false);
 
   bool updateBlock(Block block);
 
@@ -75,8 +81,6 @@ public:
 
 private:
   uint32_t referenceCounter;
-  bool writeBack;     // default true
-  bool writeAllocate; // default true
   MemoryManager *memory;
 
   std::vector<Block> blocks;
