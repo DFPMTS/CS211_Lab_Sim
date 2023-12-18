@@ -1,4 +1,4 @@
-# Lab1 Readme
+# Lab3 Readme
 ## To Run
 
 ```
@@ -7,27 +7,20 @@ cd build
 cmake ..
 make
 ```
+!!! To run the simulator, must place ```lab3/kernel``` alongside the Simulator executable
+
+## Kernel
+
+```
+lab3/kernel
+```
+
 
 ## Testcases
 
 ```
-benchmark/quicksort.c 
-benchmark/matrixmulti.c
-benchmark/cholesky.c
+lab3/test1.c 
+
+lab3/test2.c
 ```
 
-## Experiment Results
-in
-```
-benchmark/
-```
-for example, 
-```
-matmul_scoreboard_192.out
-```
-is the result of scoreboard running matrix multiplication on 192 $\times$ 192 matrices
-and 
-```
-cholesky_five_stage_32.out
-```
-is the result of five-stage-fully-bypassed pipeline (lab0) running Cholesky factorization on a 32 $\times$ 32 matrix.
