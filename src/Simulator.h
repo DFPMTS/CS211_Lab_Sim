@@ -210,10 +210,26 @@ public:
   MemoryManager *memory;
   BranchPredictor *branchPredictor;
 
+  uint32_t kernelStackBase;
+  uint32_t kernelStackSize;
+  uint32_t kernelCodeBase;
+  uint32_t kernelCodeSize;
+  uint32_t kernelContextBase;
+  uint32_t kernelContextSize;
+  uint32_t kernelRestoreAddr;
+  uint64_t saved_pc;
+
+  bool kernel_mode = false;
+
   Simulator(MemoryManager *memory, BranchPredictor *predictor);
   ~Simulator();
 
   void initStack(uint32_t baseaddr, uint32_t maxSize);
+
+  void initKernel(uint32_t kernel_stack_base, uint32_t kernel_stack_size,
+                  uint32_t kernel_code_base, uint32_t kernel_code_size,
+                  uint32_t kernel_context_base, uint32_t kernel_context_size,
+                  uint32_t kernelContextSize);
 
   void simulate();
 
@@ -701,7 +717,8 @@ private:
       }
 
       // * stall fetch & decode for branch / jump
-      if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
+      // ! also for ecall
+      if (isBranch(d_reg.inst) || isJump(d_reg.inst) || d_reg.inst == ECALL) {
         f_reg.stall = datamem_stall_lock;
         d_reg.stall = datamem_stall_lock;
       }
@@ -719,7 +736,25 @@ private:
       //        fu_status[0].busy, fu_status[0].ready(), fu_status[0].rs1_ready,
       //        fu_status[0].rs2_ready);
       for (int i = 0; i < number_of_component; ++i) {
-        if (fu_status[i].busy && fu_status[i].ready()) {
+        if (fu_status[i].busy && fu_status[i].inst == ECALL) {
+          // ! ecall must wait for all in-flight instructions to commit
+          int ready = true;
+          for (int j = 0; j < number_of_component; ++j) {
+            if (j != i) {
+              if (fu_status[j].busy) {
+                ready = false;
+              }
+            }
+          }
+
+          if (ready) {
+            simulator->saved_pc = fu_status[i].pc;
+            simulator->execute(fu_status[i], scoreboardNew.fu_status[i]);
+
+            scoreboardNew.fu_status[i].busy = false;
+          }
+
+        } else if (fu_status[i].busy && fu_status[i].ready()) {
           if (!fu_status[i].dispatched) {
             // dispatch to FU
             simulator->execute(fu_status[i], scoreboardNew.fu_status[i]);
@@ -784,7 +819,11 @@ private:
   void execute(FUStatus &fu_status, FUStatus &new_fu_status);
   void writeBack(FUStatus &fu_status);
 
-  int64_t handleSystemCall(int64_t op1, int64_t op2);
+  void handleSystemCall();
+
+  void saveContext();
+
+  void loadContext();
 
   std::string getRegInfoStr();
   void panic(const char *format, ...);

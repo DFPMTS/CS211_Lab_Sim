@@ -3,6 +3,7 @@
  */
 
 #include <bit>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -125,6 +126,44 @@ void Simulator::initStack(uint32_t baseaddr, uint32_t maxSize) {
   }
 }
 
+void Simulator::initKernel(uint32_t kernel_stack_base,
+                           uint32_t kernel_stack_size,
+                           uint32_t kernel_code_base, uint32_t kernel_code_size,
+                           uint32_t kernel_context_base,
+                           uint32_t kernel_context_size,
+                           uint32_t kernel_restore_addr) {
+  this->kernelStackBase = kernel_stack_base;
+  this->kernelStackSize = kernel_stack_size;
+  this->kernelCodeBase = kernel_code_base;
+  this->kernelCodeSize = kernel_code_size;
+  this->kernelContextBase = kernel_context_base;
+  this->kernelRestoreAddr = kernel_restore_addr;
+
+  for (uint32_t addr = kernel_stack_base;
+       addr > kernel_stack_base - kernel_stack_size; addr--) {
+    if (!this->memory->isPageExist(addr)) {
+      this->memory->addPage(addr);
+    }
+    this->memory->setByte(addr, 0);
+  }
+
+  for (uint32_t addr = kernel_code_base;
+       addr < kernel_code_base + kernel_code_size; addr++) {
+    if (!this->memory->isPageExist(addr)) {
+      this->memory->addPage(addr);
+    }
+    this->memory->setByte(addr, 0);
+  }
+
+  for (uint32_t addr = kernel_context_base;
+       addr < kernel_context_base + kernel_context_size; addr++) {
+    if (!this->memory->isPageExist(addr)) {
+      this->memory->addPage(addr);
+    }
+    this->memory->setByte(addr, 0);
+  }
+}
+
 void Simulator::simulate() {
   // Initialize pipeline registers
   memset(&this->fReg, 0, sizeof(this->fReg));
@@ -145,7 +184,10 @@ void Simulator::simulate() {
       // this->panic("Register 0's value is not zero!\n");
     }
 
-    if (this->reg[REG_SP] < this->stackBase - this->maximumStackSize) {
+    if ((!kernel_mode &&
+         this->reg[REG_SP] < this->stackBase - this->maximumStackSize) ||
+        (kernel_mode &&
+         this->reg[REG_SP] < this->kernelStackBase - this->kernelStackSize)) {
       this->panic("Stack Overflow!\n");
     }
 
@@ -213,6 +255,12 @@ void Simulator::simulate() {
 void Simulator::fetch() {
   if (this->pc % 2 != 0) {
     this->panic("Illegal PC 0x%x!\n", this->pc);
+  }
+
+  // ! special address means returning from kernel mode to user mode
+  if (this->pc == this->kernelRestoreAddr) {
+    loadContext();
+    kernel_mode = false;
   }
 
   uint32_t inst = this->memory->getInt(this->pc);
@@ -811,14 +859,15 @@ void Simulator::decode() {
     case OP_SYSTEM:
       if (funct3 == 0x0 && funct7 == 0x000) {
         instname = "ecall";
-        op1 = this->reg[REG_A0];
-        op2 = this->reg[REG_A7];
-        reg1 = REG_A0;
-        reg2 = REG_A7;
-        dest = REG_A0;
-        rs1_reg_type = RegType::INT;
-        rs2_reg_type = RegType::INT;
-        rd_reg_type = RegType::INT;
+        // ! no rs1/rs2 and rd
+        // op1 = this->reg[REG_A0];
+        // op2 = this->reg[REG_A7];
+        // reg1 = REG_A0;
+        // reg2 = REG_A7;
+        // dest = REG_A0;
+        // rs1_reg_type = RegType::INT;
+        // rs2_reg_type = RegType::INT;
+        // rd_reg_type = RegType::INT;
         insttype = ECALL;
       } else {
         this->panic("Unknown OP_SYSTEM inst with funct3 0x%x and funct7 0x%x\n",
@@ -1318,8 +1367,9 @@ void Simulator::execute(Simulator::FUStatus &fu_status,
     out = int64_t(int32_t((int32_t)op1 >> (int32_t)op2));
     break;
   case ECALL:
-    out = handleSystemCall(op1, op2);
-    writeReg = true;
+    // * interface changed
+    handleSystemCall();
+    // writeReg = true;
     break;
   default:
     this->panic("Unknown instruction type %d\n", inst);
@@ -1356,6 +1406,17 @@ void Simulator::execute(Simulator::FUStatus &fu_status,
     this->fReg.stall = 0;
     this->dReg.stall = 0;
     this->history.controlHazardCount++;
+  }
+
+  if (inst == ECALL) {
+    // * restart issuing
+    this->fRegNew.bubble = true;
+    this->dRegNew.bubble = true;
+    this->fReg.stall = 0;
+    this->dReg.stall = 0;
+    if (!this->kernel_mode) {
+      this->pc = fu_status.pc + 4;
+    }
   }
 
   bool good = true;
@@ -1458,9 +1519,13 @@ void Simulator::writeBack(FUStatus &fu_status) {
   // this->pc = this->mReg.pc;
 }
 
-int64_t Simulator::handleSystemCall(int64_t op1, int64_t op2) {
-  int64_t type = op2; // reg a7
-  int64_t arg1 = op1; // reg a0
+void Simulator::handleSystemCall() {
+  // * read registers, since all previous instructions
+  // * have commited
+  int64_t type = this->reg[REG_A7]; // reg a7
+  int64_t arg1 = this->reg[REG_A0]; // reg a0
+  int64_t arg2 = this->reg[REG_A1]; // reg a1
+
   switch (type) {
   case 0: { // print string
     uint32_t addr = arg1;
@@ -1488,18 +1553,68 @@ int64_t Simulator::handleSystemCall(int64_t op1, int64_t op2) {
     this->printStatistics();
     exit(0);
   case 4: // read char
-    scanf(" %c", (char *)&op1);
+    scanf(" %c", (char *)&this->reg[REG_A0]);
     break;
   case 5: // read num
-    scanf(" %ld", &op1);
+    scanf(" %ld", &this->reg[REG_A0]);
     break;
   case 6: // print float
     printf("%f", std::bit_cast<float>((int32_t)arg1));
     break;
+  case 7: // * lab3's syscall
+    // * switch to kernel mode
+    this->kernel_mode = true;
+    // * save context
+    this->saveContext();
+    // * use kernel stack
+    this->reg[REG_SP] = this->kernelStackBase;
+    // * special return address acts as a signal for restoring context, see
+    // * Fetch() for details
+    this->reg[REG_RA] = this->kernelRestoreAddr;
+    // * redirect control flow
+    this->pc = this->kernelCodeBase;
+
+    break;
+
   default:
     this->panic("Unknown syscall type %d\n", type);
   }
-  return op1;
+}
+
+void Simulator::saveContext() {
+  // * GPR (save x0 anyway)
+  for (int i = 0; i < 32; ++i) {
+    memory->setLong(this->kernelContextBase + i * 8,
+                    std::bit_cast<uint64_t>(this->reg[i]));
+  }
+
+  // * floating point
+  auto fp_start = this->kernelContextBase + 8 * 32;
+  for (int i = 0; i < 32; ++i) {
+    memory->setInt(fp_start + i * 4, std::bit_cast<uint32_t>(this->reg_f[i]));
+  }
+
+  // * pc has been saved when ecall was issued
+}
+
+void Simulator::loadContext() {
+  // * a0 hold the return value of syscall
+  auto syscall_return_value = this->reg[REG_A0];
+  // * GPR
+  for (int i = 1; i < 32; ++i) {
+    this->reg[i] = std::bit_cast<int64_t>(
+        memory->getLong(this->kernelContextBase + i * 8));
+  }
+  this->reg[REG_A0] = syscall_return_value;
+
+  // * floating point
+  auto fp_start = this->kernelContextBase + 8 * 32;
+  for (int i = 0; i < 32; ++i) {
+    this->reg_f[i] = std::bit_cast<float>(memory->getInt(fp_start + i * 4));
+  }
+
+  // * pc now points to the next instruction after ecall
+  this->pc = this->saved_pc + 4;
 }
 
 void Simulator::printInfo() {
@@ -1519,20 +1634,23 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
-  printf("------------ STATISTICS -----------\n");
-  printf("Number of Instructions: %u\n", this->history.instCount);
-  printf("Number of Cycles: %u\n", this->history.cycleCount);
-  printf("Avg Cycles per Instrcution: %.4f\n",
-         (float)this->history.cycleCount / this->history.instCount);
-  printf("Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
-         (float)this->history.predictedBranch /
-             (this->history.predictedBranch + this->history.unpredictedBranch),
-         this->branchPredictor->strategyName().c_str());
-  printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
-  printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
-  printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
-  printf("-----------------------------------\n");
-  // this->memory->printStatistics();
+  if (verbose) {
+    printf("------------ STATISTICS -----------\n");
+    printf("Number of Instructions: %u\n", this->history.instCount);
+    printf("Number of Cycles: %u\n", this->history.cycleCount);
+    printf("Avg Cycles per Instrcution: %.4f\n",
+           (float)this->history.cycleCount / this->history.instCount);
+    printf(
+        "Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
+        (float)this->history.predictedBranch /
+            (this->history.predictedBranch + this->history.unpredictedBranch),
+        this->branchPredictor->strategyName().c_str());
+    printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
+    printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
+    printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
+    printf("-----------------------------------\n");
+    // this->memory->printStatistics();
+  }
 }
 
 std::string Simulator::getRegInfoStr() {

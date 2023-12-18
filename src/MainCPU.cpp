@@ -28,6 +28,18 @@ bool isSingleStep = 0;
 bool dumpHistory = 0;
 uint32_t stackBaseAddr = 0x80000000;
 uint32_t stackSize = 0x400000;
+
+uint32_t kernel_stack_base = 0x9000000;
+uint32_t kernel_stack_size = 0x400000;
+
+uint32_t kernel_code_base = 0xA0000000;
+uint32_t kernel_code_size = 0x100000;
+
+uint32_t kernel_context_base = 0xB0000000;
+uint32_t kernel_context_size = 0x100000;
+
+uint32_t kernel_restore_addr = 0xC0000000;
+
 MemoryManager memory;
 Cache *l1Cache, *l2Cache, *l3Cache;
 BranchPredictor::Strategy strategy = BranchPredictor::Strategy::NT;
@@ -95,6 +107,19 @@ int main(int argc, char **argv) {
   simulator.branchPredictor->strategy = strategy;
   simulator.pc = reader.get_entry();
   simulator.initStack(stackBaseAddr, stackSize);
+  // * kernel stack
+  simulator.initKernel(kernel_stack_base, kernel_stack_size, kernel_code_base,
+                       kernel_code_size, kernel_context_base,
+                       kernel_context_size, kernel_restore_addr);
+  // * kernel code
+  auto fin = std::ifstream("kernel");
+  uint32_t inst;
+  int offset = 0;
+  while (fin >> std::hex >> inst) {
+    simulator.memory->setInt(kernel_code_base + offset, inst);
+    offset += 4;
+  }
+
   simulator.simulate();
 
   if (dumpHistory) {
