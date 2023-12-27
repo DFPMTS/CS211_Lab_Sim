@@ -1,15 +1,21 @@
-/*
-*************************************************************
-
-  Modified from test/matrixmulti.c in the startup codebase.
-
-*************************************************************
-*/
 #include "lib.h"
 
-const int M = 192;
+const int M = 40;
 
 void matmulti(float a[M][M], float b[M][M], float c[M][M], int M) {
+
+  // for (int i = 0; i < M; ++i) {
+  //   for (int j = 0; j < M; ++j) {
+  //     c[i][j] = 0;
+  //   }
+  // }
+  // for (int k = 0; k < M; ++k) {
+  //   for (int j = 0; j < M; ++j) {
+  //     for (int i = 0; i < M; ++i) {
+  //       c[i][j] += a[i][k] * b[k][j];
+  //     }
+  //   }
+  // }
   for (int i = 0; i < M; ++i) {
     for (int j = 0; j < M; ++j) {
       c[i][j] = 0;

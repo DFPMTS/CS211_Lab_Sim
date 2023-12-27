@@ -34,7 +34,7 @@ void quicksort(int *a, int begin, int end) {
 }
 
 int main() {
-  const int M = 1000;
+  const int M = 100;
   int b[M];
   for (int i = 0; i < M; ++i) {
     b[i] = M - i;

@@ -639,6 +639,13 @@ private:
           new_entry.busy = false;
           robNew.increase(robNew.front);
           --robNew.size;
+          if (isBranch(entry.inst)) {
+            if (entry.branch_misprediction) {
+              simulator->history.unpredictedBranch++;
+            } else {
+              simulator->history.predictedBranch++;
+            }
+          }
           if ((isBranch(entry.inst) || isJump(entry.inst)) &&
               entry.branch_misprediction) {
             // * clear ROB
