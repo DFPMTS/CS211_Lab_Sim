@@ -539,6 +539,8 @@ private:
     float f_rd;
     uint32_t A;
     std::string inst_info;
+    bool branch_misprediction;
+    uint32_t target_pc;
   };
 
   struct ROB {
@@ -546,6 +548,15 @@ private:
         : front(0), end(0), size(0), capacity(rob_size), rob(rob_size) {}
 
     bool free() { return size < capacity; }
+
+    void clear() {
+      for (int i = 0; i < rob.size(); ++i) {
+        rob[i].busy = false;
+      }
+      size = 0;
+      front = 0;
+      end = 0;
+    }
 
     void commit(ROB &robNew, Simulator *simulator) {
       if (VERBOSE)
@@ -556,7 +567,7 @@ private:
         std::cerr << "Commit: " << front << "\n";
       auto &entry = rob[front];
       auto &new_entry = robNew[front];
-      if (entry.busy && entry.ready) {
+      if (this->size && entry.busy && (entry.ready || entry.inst == ECALL)) {
         if (isStore(entry.inst)) {
           static int store_timeout = -1;
           if (store_timeout == -1) {
@@ -582,11 +593,11 @@ private:
             default:
               assert(0);
             }
-            assert(good);
+            // assert(good);
             store_timeout = cycles;
           } else {
             // * will be available by next cycle
-            if (store_timeout <= 1) {
+            if (store_timeout == 0) {
               new_entry.busy = false;
               robNew.increase(robNew.front);
               --robNew.size;
@@ -596,8 +607,18 @@ private:
             }
           }
         } else {
-          if (entry.rd_type == RegType::INT && entry.rd != 0 &&
-              simulator->tomasuloNew.result_status_x[entry.rd] == front) {
+          if (entry.inst == ECALL) {
+            entry.x_rd = simulator->handleSystemCall(simulator->reg[REG_A0],
+                                                     simulator->reg[REG_A7]);
+            for (int j = 0; j < simulator->tomasuloNew.rs.size(); ++j) {
+              auto &rs = simulator->tomasuloNew.rs[j];
+              rs.update_ready(entry.rd_type, entry.rd, entry.x_rd, .0f, front);
+            }
+            if (VERBOSE) {
+              std::cerr << "INPUT:  " << entry.x_rd << "\n";
+            }
+          }
+          if (entry.rd_type == RegType::INT && entry.rd != 0) {
             if (VERBOSE)
               std::cerr << " Write back integer: " << entry.rd << " "
                         << entry.x_rd << '\n';
@@ -605,19 +626,40 @@ private:
             // * may overwrite
             // * consider a issue in the same cycle
             // * must check tomasuloNew
-            simulator->tomasuloNew.result_status_x[entry.rd] = -1;
-          } else if (entry.rd_type == RegType::FLOAT &&
-                     simulator->tomasuloNew.result_status_f[entry.rd] ==
-                         front) {
+            if (simulator->tomasuloNew.result_status_x[entry.rd] == front)
+              simulator->tomasuloNew.result_status_x[entry.rd] = -1;
+          } else if (entry.rd_type == RegType::FLOAT) {
             if (VERBOSE)
               std::cerr << " Write back float: " << entry.rd << " "
                         << entry.f_rd << '\n';
             simulator->reg_f[entry.rd] = entry.f_rd;
-            simulator->tomasuloNew.result_status_f[entry.rd] = -1;
+            if (simulator->tomasuloNew.result_status_f[entry.rd] == front)
+              simulator->tomasuloNew.result_status_f[entry.rd] = -1;
           }
           new_entry.busy = false;
           robNew.increase(robNew.front);
           --robNew.size;
+          if ((isBranch(entry.inst) || isJump(entry.inst)) &&
+              entry.branch_misprediction) {
+            // * clear ROB
+            robNew.clear();
+            // * clear RS
+            simulator->tomasuloNew.clearRS();
+            // * clear RegStat
+            memset(simulator->tomasuloNew.result_status_x, -1,
+                   sizeof(simulator->tomasuloNew.result_status_x));
+            memset(simulator->tomasuloNew.result_status_f, -1,
+                   sizeof(simulator->tomasuloNew.result_status_f));
+            // * redirect control flow
+            simulator->pc = entry.target_pc;
+            if (VERBOSE)
+              std::cerr << "Redirect:  " << simulator->pc << "\n";
+            simulator->fReg.stall = 0;
+            simulator->dReg.stall = 0;
+            simulator->decode_hold = 0;
+            simulator->fRegNew.bubble = true;
+            simulator->dRegNew.bubble = true;
+          }
         }
       }
     }
@@ -748,6 +790,9 @@ private:
     int offset;
     uint32_t A;
     int rob_index;
+    bool branch_misprediction;
+    int predicted_branch;
+    uint32_t target_pc;
 
     RegType rd_type;
     RegId rd;
@@ -805,6 +850,13 @@ private:
       return free_index;
     }
 
+    void clearRS() {
+      for (int i = 0; i < rs.size(); ++i) {
+        rs[i].busy = false;
+      }
+      memset(FU_busy, 0, sizeof(FU_busy));
+    }
+
     // * try to issue an instruction
     // return false: 1. FU needed busy 3. result register pending
     bool issue(DReg &d_reg, FReg &f_reg, Tomasulo &tomasulo,
@@ -851,6 +903,8 @@ private:
       entry.timeout = latency[fu];
       entry.offset = d_reg.offset;
       entry.pc = d_reg.pc;
+      entry.branch_misprediction = false;
+      entry.predicted_branch = d_reg.predictedBranch;
 
       entry.rob_index = rob_index;
 
@@ -975,10 +1029,14 @@ private:
       //   scoreboardNew.fu_status[fmaAdd].timeout = -1;
       // }
 
-      // * stall fetch & decode for branch / jump
-      if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
-        f_reg.stall = datamem_stall_lock;
-        d_reg.stall = datamem_stall_lock;
+      // // * stall fetch & decode for branch / jump
+      // if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
+      //   f_reg.stall = datamem_stall_lock;
+      //   d_reg.stall = datamem_stall_lock;
+      // }
+
+      if (entry.inst == ECALL) {
+        entry.busy = false;
       }
 
       return true;
@@ -1017,6 +1075,9 @@ private:
             } else if (rs[i].rd_type == RegType::FLOAT) {
               rob_entry.f_rd = rs[i].out_f;
             }
+            rob_entry.target_pc = rs[i].target_pc;
+            rob_entry.branch_misprediction = rs[i].branch_misprediction;
+
             if (isStore(rs[i].inst)) {
               rob_entry.A = rs[i].out;
               rob_entry.x_rd = rs[i].op2;
@@ -1112,7 +1173,7 @@ private:
           // * Simulate selection
           FU_busy[rs[i].fu] = true;
           tomasuloNew.FU_busy[rs[i].fu] = true;
-          if (!isLoad(rs[i].inst) || rs[i].A != -1) {
+          if ((!isLoad(rs[i].inst) || rs[i].A != -1)) {
             simulator->execute(rs[i], tomasuloNew.rs[i]);
           }
 

@@ -94,7 +94,7 @@ bool MemoryManager::setByteNoCache(uint32_t addr, uint8_t val) {
 
 uint8_t MemoryManager::getByte(uint32_t addr, uint32_t *cycles) {
   if (!this->isAddrExist(addr)) {
-    dbgprintf("Byte read to invalid addr 0x%x!\n", addr);
+    // dbgprintf("Byte read to invalid addr 0x%x!\n", addr);
     return false;
   }
   if (this->cache != nullptr) {
@@ -108,7 +108,7 @@ uint8_t MemoryManager::getByte(uint32_t addr, uint32_t *cycles) {
 
 uint8_t MemoryManager::getByteNoCache(uint32_t addr) {
   if (!this->isAddrExist(addr)) {
-    dbgprintf("Byte read to invalid addr 0x%x!\n", addr);
+    // dbgprintf("Byte read to invalid addr 0x%x!\n", addr);
     return false;
   }
   uint32_t i = this->getFirstEntryId(addr);

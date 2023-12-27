@@ -974,19 +974,20 @@ void Simulator::decode() {
 
   bool predictedBranch = false;
   if (isBranch(insttype)) {
-    // predictedBranch = this->branchPredictor->predict(this->fReg.pc, insttype,
-    //                                                  op1, op2, offset);
-    predictedBranch = false;
-    // ! turn off branch prediction
+    predictedBranch = this->branchPredictor->predict(this->fReg.pc, insttype,
+                                                     op1, op2, offset);
+    // predictedBranch = false;
+    // ! turn on branch prediction
     if (predictedBranch) {
-      this->predictedPC = this->fReg.pc + offset;
-      this->anotherPC = this->fReg.pc + 4;
+      // this->predictedPC = this->fReg.pc + offset;
+      // this->anotherPC = this->fReg.pc + 4;
       this->fRegNew.bubble = true;
-    } else {
-      this->anotherPC = this->fReg.pc + offset;
+      this->pc = this->fReg.pc + offset;
     }
+    // } else {
+    //   this->anotherPC = this->fReg.pc + offset;
+    // }
   }
-
   this->dRegNew.stall = false;
   this->dRegNew.bubble = false;
   this->dRegNew.rs1 = reg1;
@@ -1360,39 +1361,6 @@ void Simulator::execute(Simulator::ReservationStation &rs,
     out_f = std::bit_cast<float>(0x7fc00000);
   }
 
-  // Pipeline Related Code
-  if (isBranch(inst)) {
-    if (VERBOSE)
-      std::cerr << "Branch: " << op1 << " " << op2 << "\n";
-    // Control Hazard Here
-    // ! Bug fix
-    if (branch) {
-      this->pc = dRegPC;
-      if (VERBOSE)
-        std::cerr << "))))))))Branch taken;\n";
-    } else {
-      this->pc = rs.pc + 4;
-    }
-    // ! Bug fix end
-    this->fRegNew.bubble = true;
-    this->dRegNew.bubble = true;
-    this->fReg.stall = 0;
-    this->dReg.stall = 0;
-    this->history.unpredictedBranch++;
-    this->history.controlHazardCount++;
-    // this->dReg.pc: fetch original inst addr, not the modified one
-    // ! this->branchPredictor->update(this->dReg.pc, branch);
-  }
-  if (isJump(inst)) {
-    // Control hazard here
-    this->pc = dRegPC;
-    this->fRegNew.bubble = true;
-    this->dRegNew.bubble = true;
-    this->fReg.stall = 0;
-    this->dReg.stall = 0;
-    this->history.controlHazardCount++;
-  }
-
   bool good = true;
   uint32_t cycles = 0;
 
@@ -1467,12 +1435,59 @@ void Simulator::execute(Simulator::ReservationStation &rs,
     std::cerr << "Out registered at new_rs: " << out << "\n";
   new_rs.out_f = out_f;
 
+  // Pipeline Related Code
+  if (isBranch(inst)) {
+    // Control Hazard Here
+    // ! Bug fix
+    if (branch) {
+      // this->pc = dRegPC;
+      new_rs.target_pc = dRegPC;
+      if (VERBOSE)
+        std::cerr << "))))))))Branch taken;\n";
+    } else {
+      // this->pc = rs.pc + 4;
+      new_rs.target_pc = rs.pc + 4;
+    }
+    if (VERBOSE) {
+      std::cerr << "Branch: " << op1 << " " << op2 << "\n";
+      std::cerr << "PC: " << new_rs.target_pc << "\n";
+    }
+    // * branch resolution at commit
+    new_rs.branch_misprediction = rs.predicted_branch ^ branch;
+    // std::cerr << "Predicted:  " << rs.predicted_branch << "\n";
+    // std::cerr << "In fact:    " << branch << "\n";
+    // ! Bug fix end
+
+    // this->fRegNew.bubble = true;
+    // this->dRegNew.bubble = true;
+    // this->fReg.stall = 0;
+    // this->dReg.stall = 0;
+    // this->history.unpredictedBranch++;
+    // this->history.controlHazardCount++;
+    // this->dReg.pc: fetch original inst addr, not the modified one
+    this->branchPredictor->update(this->dReg.pc, branch);
+  }
+  if (isJump(inst)) {
+    // Control hazard here
+
+    // this->pc = dRegPC;
+    // * branch resolution at commit
+    new_rs.branch_misprediction = true;
+    new_rs.target_pc = dRegPC;
+    // this->fRegNew.bubble = true;
+    // this->dRegNew.bubble = true;
+    // this->fReg.stall = 0;
+    // this->dReg.stall = 0;
+    // this->history.controlHazardCount++;
+  }
+
   // * Consider sb/sh/sw
   if (isStore(inst)) {
     new_rs.op2 = op2;
     new_rs.timeout = 1;
-  } else if (rs.timeout == datamem_stall_lock)
+  } else if (rs.timeout == datamem_stall_lock) {
     new_rs.timeout = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
+  }
 }
 
 // void Simulator::writeBack(FUStatus &rs) {
@@ -1560,22 +1575,21 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
-  if (VERBOSE) {
-    printf("------------ STATISTICS -----------\n");
-    printf("Number of Instructions: %u\n", this->history.instCount);
-    printf("Number of Cycles: %u\n", this->history.cycleCount);
-    printf("Avg Cycles per Instrcution: %.4f\n",
-           (float)this->history.cycleCount / this->history.instCount);
-    printf(
-        "Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
-        (float)this->history.predictedBranch /
-            (this->history.predictedBranch + this->history.unpredictedBranch),
-        this->branchPredictor->strategyName().c_str());
-    printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
-    printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
-    printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
-    printf("-----------------------------------\n");
-  }
+  // if (VERBOSE) {
+  printf("------------ STATISTICS -----------\n");
+  printf("Number of Instructions: %u\n", this->history.instCount);
+  printf("Number of Cycles: %u\n", this->history.cycleCount);
+  printf("Avg Cycles per Instrcution: %.4f\n",
+         (float)this->history.cycleCount / this->history.instCount);
+  printf("Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
+         (float)this->history.predictedBranch /
+             (this->history.predictedBranch + this->history.unpredictedBranch),
+         this->branchPredictor->strategyName().c_str());
+  printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
+  printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
+  printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
+  printf("-----------------------------------\n");
+  // }
   // this->memory->printStatistics();
 }
 
