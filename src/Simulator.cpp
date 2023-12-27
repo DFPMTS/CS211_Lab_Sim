@@ -160,7 +160,9 @@ void Simulator::simulate() {
     // Changing them will introduce strange bugs
     this->fetch();
     this->decode();
-    this->scoreboard.tick(this, scoreboardNew);
+    this->tomasulo.tick(this, tomasuloNew);
+    if (VERBOSE)
+      tomasuloNew.rob.print();
 
     // this->excecute();
     // this->writeBack();
@@ -174,9 +176,50 @@ void Simulator::simulate() {
       this->dReg = this->dRegNew;
     else
       this->dReg.stall--;
-
-    scoreboard = scoreboardNew;
-
+    if (VERBOSE) {
+      std::cerr << "*****************************************************\n";
+      std::cerr << "Old:\n";
+      for (int i = 0; i < tomasulo.rs.size(); ++i) {
+        if (tomasulo.rs[i].busy && !tomasulo.rs[i].ready()) {
+          std::cerr << tomasulo.rs[i].inst_info << " "
+                    << (!tomasulo.rs[i].rs1_ready ? " (x)rs1" : "")
+                    << (!tomasulo.rs[i].rs2_ready ? " (x)rs2" : "")
+                    << (!tomasulo.rs[i].rs3_ready ? " (x)rs3" : "") << "\n";
+        }
+      }
+      for (int i = 0; i < 32; ++i) {
+        std::cerr << REGNAME[i] << ": " << tomasulo.result_status_x[i]
+                  << "    ";
+      }
+      std::cerr << "\n";
+      std::cerr << "New:\n";
+      for (int i = 0; i < tomasuloNew.rs.size(); ++i) {
+        if (tomasuloNew.rs[i].busy && !tomasuloNew.rs[i].ready()) {
+          std::cerr << tomasuloNew.rs[i].inst_info << " "
+                    << (!tomasuloNew.rs[i].rs1_ready ? " (x)rs1" : "")
+                    << (!tomasuloNew.rs[i].rs2_ready ? " (x)rs2" : "")
+                    << (!tomasuloNew.rs[i].rs3_ready ? " (x)rs3" : "") << "\n";
+        }
+      }
+      for (int i = 0; i < 32; ++i) {
+        std::cerr << REGNAME[i] << ": " << tomasuloNew.result_status_x[i]
+                  << "    ";
+      }
+      std::cerr << "\n";
+      std::cerr << "*****************************************************\n";
+    }
+    tomasulo = tomasuloNew;
+    if (VERBOSE) {
+      for (int i = 0; i < tomasulo.rs.size(); ++i) {
+        if (tomasulo.rs[i].busy && !tomasulo.rs[i].ready()) {
+          std::cerr << tomasulo.rs[i].inst_info << " "
+                    << (!tomasulo.rs[i].rs1_ready ? " (x)rs1" : "")
+                    << (!tomasulo.rs[i].rs2_ready ? " (x)rs2" : "")
+                    << (!tomasulo.rs[i].rs3_ready ? " (x)rs3" : "") << "\n";
+        }
+      }
+      std::cerr << "*****************************************************\n";
+    }
     memset(&this->fRegNew, 0, sizeof(this->fRegNew));
     memset(&this->dRegNew, 0, sizeof(this->dRegNew));
 
@@ -963,8 +1006,12 @@ void Simulator::decode() {
   this->dRegNew.rs2_reg_type = rs2_reg_type;
   this->dRegNew.rs3_reg_type = rs3_reg_type;
   this->dRegNew.rd_reg_type = rd_reg_type;
-
-  if (scoreboard.issue(dRegNew, fRegNew, scoreboardNew)) {
+  {
+    std::stringstream sstream;
+    sstream << std::hex << fReg.pc;
+    inststr = "0x" + sstream.str() + ":    " + inststr;
+  }
+  if (tomasulo.issue(dRegNew, fRegNew, tomasulo, tomasuloNew, inststr)) {
     // success
     if (verbose)
       printf("Issued\n");
@@ -979,48 +1026,32 @@ void Simulator::decode() {
   }
 }
 
-void Simulator::execute(Simulator::FUStatus &fu_status,
-                        Simulator::FUStatus &new_fu_status) {
+void Simulator::execute(Simulator::ReservationStation &rs,
+                        Simulator::ReservationStation &new_rs) {
   if (verbose) {
-    printf("Execute: %s\n", INSTNAME[fu_status.inst]);
+    printf("Execute: %s\n", INSTNAME[rs.inst]);
   }
 
   this->history.instCount++;
 
-  Inst inst = fu_status.inst;
-  int64_t op1 = fu_status.op1;
-  int64_t op2 = fu_status.op2;
-  float op1_f = fu_status.op1_f;
-  float op2_f = fu_status.op2_f;
-  float op3_f = fu_status.op3_f;
+  Inst inst = rs.inst;
+  int64_t op1 = rs.op1;
+  int64_t op2 = rs.op2;
+  float op1_f = rs.op1_f;
+  float op2_f = rs.op2_f;
+  float op3_f = rs.op3_f;
 
-  if (fu_status.rs1_type == RegType::INT) {
-    op1 = reg[fu_status.rs1];
-  } else if (fu_status.rs1_type == RegType::FLOAT) {
-    op1_f = reg_f[fu_status.rs1];
-  }
-
-  if (fu_status.rs2_type == RegType::INT) {
-    op2 = reg[fu_status.rs2];
-  } else if (fu_status.rs2_type == RegType::FLOAT) {
-    op2_f = reg_f[fu_status.rs2];
-  }
-
-  if (fu_status.rs3_type == RegType::FLOAT) {
-    op3_f = reg_f[fu_status.rs3];
-  }
-
-  int64_t offset = fu_status.offset;
+  int64_t offset = rs.offset;
   // bool predictedBranch = this->dReg.predictedBranch;
-  RegType rs1_reg_type = fu_status.rs1_type;
-  RegType rs2_reg_type = fu_status.rs2_type;
-  RegType rs3_reg_type = fu_status.rs3_type;
-  RegType rd_reg_type = fu_status.rd_type;
+  RegType rs1_reg_type = rs.rs1_type;
+  RegType rs2_reg_type = rs.rs2_type;
+  RegType rs3_reg_type = rs.rs3_type;
+  RegType rd_reg_type = rs.rd_type;
 
-  uint64_t dRegPC = fu_status.pc;
+  uint64_t dRegPC = rs.pc;
 
   bool writeReg = false;
-  RegId destReg = fu_status.rd;
+  RegId destReg = rs.rd;
   int64_t out = 0;
   float out_f = 0.0f;
   bool writeMem = false;
@@ -1331,13 +1362,17 @@ void Simulator::execute(Simulator::FUStatus &fu_status,
 
   // Pipeline Related Code
   if (isBranch(inst)) {
-
+    if (VERBOSE)
+      std::cerr << "Branch: " << op1 << " " << op2 << "\n";
     // Control Hazard Here
     // ! Bug fix
-    if (branch)
+    if (branch) {
       this->pc = dRegPC;
-    else
-      this->pc = fu_status.pc + 4;
+      if (VERBOSE)
+        std::cerr << "))))))))Branch taken;\n";
+    } else {
+      this->pc = rs.pc + 4;
+    }
     // ! Bug fix end
     this->fRegNew.bubble = true;
     this->dRegNew.bubble = true;
@@ -1361,32 +1396,32 @@ void Simulator::execute(Simulator::FUStatus &fu_status,
   bool good = true;
   uint32_t cycles = 0;
 
-  if (writeMem) {
-    switch (memLen) {
-    case 1:
-      good = this->memory->setByte(out, op2, &cycles);
-      break;
-    case 2:
-      good = this->memory->setShort(out, op2, &cycles);
-      break;
-    case 4:
-      if (inst == SW) {
-        good = this->memory->setInt(out, op2, &cycles);
-      } else if (inst == FSW) {
-        good = this->memory->setInt(out, std::bit_cast<int>(op2_f), &cycles);
-      }
-      break;
-    case 8:
-      good = this->memory->setLong(out, op2, &cycles);
-      break;
-    default:
-      this->panic("Unknown memLen %d\n", memLen);
-    }
-  }
+  // if (writeMem) {
+  //   switch (memLen) {
+  //   case 1:
+  //     good = this->memory->setByte(out, op2, &cycles);
+  //     break;
+  //   case 2:
+  //     good = this->memory->setShort(out, op2, &cycles);
+  //     break;
+  //   case 4:
+  //     if (inst == SW) {
+  //       good = this->memory->setInt(out, op2, &cycles);
+  //     } else if (inst == FSW) {
+  //       good = this->memory->setInt(out, std::bit_cast<int>(op2_f), &cycles);
+  //     }
+  //     break;
+  //   case 8:
+  //     good = this->memory->setLong(out, op2, &cycles);
+  //     break;
+  //   default:
+  //     this->panic("Unknown memLen %d\n", memLen);
+  //   }
+  // }
 
-  if (!good) {
-    this->panic("Invalid Mem Access!\n");
-  }
+  // if (!good) {
+  //   this->panic("Invalid Mem Access!\n");
+  // }
 
   if (readMem) {
     switch (memLen) {
@@ -1427,36 +1462,42 @@ void Simulator::execute(Simulator::FUStatus &fu_status,
     }
   }
 
-  new_fu_status.out = out;
-  new_fu_status.out_f = out_f;
+  new_rs.out = out;
+  if (VERBOSE)
+    std::cerr << "Out registered at new_rs: " << out << "\n";
+  new_rs.out_f = out_f;
 
-  if (fu_status.timeout == datamem_stall_lock)
-    new_fu_status.timeout = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
+  // * Consider sb/sh/sw
+  if (isStore(inst)) {
+    new_rs.op2 = op2;
+    new_rs.timeout = 1;
+  } else if (rs.timeout == datamem_stall_lock)
+    new_rs.timeout = std::max<uint32_t>(datamem_lat_lower_bound, cycles);
 }
 
-void Simulator::writeBack(FUStatus &fu_status) {
+// void Simulator::writeBack(FUStatus &rs) {
 
-  if (verbose) {
-    printf("WriteBack: %s\n", INSTNAME[fu_status.inst]);
-  }
+//   if (verbose) {
+//     printf("WriteBack: %s\n", INSTNAME[rs.inst]);
+//   }
 
-  RegId rd = fu_status.rd;
-  RegType rd_type = fu_status.rd_type;
+//   RegId rd = rs.rd;
+//   RegType rd_type = rs.rd_type;
 
-  if (verbose)
-    printf("%d: %d %f\n", rd, fu_status.out, fu_status.out_f);
+//   if (verbose)
+//     printf("%d: %d %f\n", rd, rs.out, rs.out_f);
 
-  if (rd > 0 || rd_type == RegType::FLOAT) {
-    // Real Write Back
-    if (rd_type == RegType::INT) {
-      this->reg[rd] = fu_status.out;
-    } else if (rd_type == RegType::FLOAT) {
-      this->reg_f[rd] = fu_status.out_f;
-    }
-  }
+//   if (rd > 0 || rd_type == RegType::FLOAT) {
+//     // Real Write Back
+//     if (rd_type == RegType::INT) {
+//       this->reg[rd] = rs.out;
+//     } else if (rd_type == RegType::FLOAT) {
+//       this->reg_f[rd] = rs.out_f;
+//     }
+//   }
 
-  // this->pc = this->mReg.pc;
-}
+//   // this->pc = this->mReg.pc;
+// }
 
 int64_t Simulator::handleSystemCall(int64_t op1, int64_t op2) {
   int64_t type = op2; // reg a7
@@ -1519,19 +1560,22 @@ void Simulator::printInfo() {
 }
 
 void Simulator::printStatistics() {
-  printf("------------ STATISTICS -----------\n");
-  printf("Number of Instructions: %u\n", this->history.instCount);
-  printf("Number of Cycles: %u\n", this->history.cycleCount);
-  printf("Avg Cycles per Instrcution: %.4f\n",
-         (float)this->history.cycleCount / this->history.instCount);
-  printf("Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
-         (float)this->history.predictedBranch /
-             (this->history.predictedBranch + this->history.unpredictedBranch),
-         this->branchPredictor->strategyName().c_str());
-  printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
-  printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
-  printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
-  printf("-----------------------------------\n");
+  if (VERBOSE) {
+    printf("------------ STATISTICS -----------\n");
+    printf("Number of Instructions: %u\n", this->history.instCount);
+    printf("Number of Cycles: %u\n", this->history.cycleCount);
+    printf("Avg Cycles per Instrcution: %.4f\n",
+           (float)this->history.cycleCount / this->history.instCount);
+    printf(
+        "Branch Perdiction Accuacy: %.4f (Strategy: %s)\n",
+        (float)this->history.predictedBranch /
+            (this->history.predictedBranch + this->history.unpredictedBranch),
+        this->branchPredictor->strategyName().c_str());
+    printf("Number of Control Hazards: %u\n", this->history.controlHazardCount);
+    printf("Number of Data Hazards: %u\n", this->history.dataHazardCount);
+    printf("Number of Memory Hazards: %u\n", this->history.memoryHazardCount);
+    printf("-----------------------------------\n");
+  }
   // this->memory->printStatistics();
 }
 

@@ -7,10 +7,14 @@
 #ifndef SIMULATOR_H
 #define SIMULATOR_H
 
+#include <bit>
+#include <cassert>
 #include <cstdarg>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+inline int VERBOSE = 0;
 
 #include "BranchPredictor.h"
 #include "MemoryManager.h"
@@ -345,6 +349,16 @@ private:
       /* fmaMul */ 6,
   };
 
+  static inline bool isLoad(RISCV::Inst inst) {
+    return (inst == LB || inst == LH || inst == LW || inst == FLW ||
+            inst == LD || inst == LBU || inst == LHU || inst == LWU);
+  }
+
+  static inline bool isStore(RISCV::Inst inst) {
+    return (inst == SB || inst == SH || inst == SW || inst == FSW ||
+            inst == SD);
+  }
+
   static inline executeComponent getComponentUsed(RISCV::Inst inst) {
     { // start of using namespace, to reduce code duplication
       using namespace RISCV;
@@ -511,7 +525,163 @@ private:
     return (type1 == type2) && (id1 == id2);
   }
 
-  struct FUStatus {
+  using ROBIndex = int;
+
+  struct ROBEntry {
+    ROBEntry()
+        : ready(false), busy(false), inst(UNKNOWN), rd_type(RegType::INVALID) {}
+    bool ready;
+    bool busy;
+    Inst inst;
+    RegType rd_type;
+    RegId rd;
+    uint64_t x_rd;
+    float f_rd;
+    uint32_t A;
+    std::string inst_info;
+  };
+
+  struct ROB {
+    ROB(int rob_size)
+        : front(0), end(0), size(0), capacity(rob_size), rob(rob_size) {}
+
+    bool free() { return size < capacity; }
+
+    void commit(ROB &robNew, Simulator *simulator) {
+      if (VERBOSE)
+        std::cerr << "ROB size: " << size << "\n";
+      if (!size)
+        return;
+      if (VERBOSE)
+        std::cerr << "Commit: " << front << "\n";
+      auto &entry = rob[front];
+      auto &new_entry = robNew[front];
+      if (entry.busy && entry.ready) {
+        if (isStore(entry.inst)) {
+          static int store_timeout = -1;
+          if (store_timeout == -1) {
+            uint32_t cycles = 0;
+            bool good = false;
+            switch (entry.inst) {
+            case SB:
+              good = simulator->memory->setByte(entry.A, entry.x_rd, &cycles);
+              break;
+            case SH:
+              good = simulator->memory->setShort(entry.A, entry.x_rd, &cycles);
+              break;
+            case SW:
+              good = simulator->memory->setInt(entry.A, entry.x_rd, &cycles);
+              break;
+            case FSW:
+              good = simulator->memory->setInt(
+                  entry.A, std::bit_cast<int>(entry.f_rd), &cycles);
+              break;
+            case SD:
+              good = simulator->memory->setLong(entry.A, entry.x_rd, &cycles);
+              break;
+            default:
+              assert(0);
+            }
+            assert(good);
+            store_timeout = cycles;
+          } else {
+            // * will be available by next cycle
+            if (store_timeout <= 1) {
+              new_entry.busy = false;
+              robNew.increase(robNew.front);
+              --robNew.size;
+              store_timeout = -1;
+            } else {
+              --store_timeout;
+            }
+          }
+        } else {
+          if (entry.rd_type == RegType::INT && entry.rd != 0 &&
+              simulator->tomasuloNew.result_status_x[entry.rd] == front) {
+            if (VERBOSE)
+              std::cerr << " Write back integer: " << entry.rd << " "
+                        << entry.x_rd << '\n';
+            simulator->reg[entry.rd] = entry.x_rd;
+            // * may overwrite
+            // * consider a issue in the same cycle
+            // * must check tomasuloNew
+            simulator->tomasuloNew.result_status_x[entry.rd] = -1;
+          } else if (entry.rd_type == RegType::FLOAT &&
+                     simulator->tomasuloNew.result_status_f[entry.rd] ==
+                         front) {
+            if (VERBOSE)
+              std::cerr << " Write back float: " << entry.rd << " "
+                        << entry.f_rd << '\n';
+            simulator->reg_f[entry.rd] = entry.f_rd;
+            simulator->tomasuloNew.result_status_f[entry.rd] = -1;
+          }
+          new_entry.busy = false;
+          robNew.increase(robNew.front);
+          --robNew.size;
+        }
+      }
+    }
+
+    ROBEntry &operator[](int index) { return rob[index]; }
+
+    int issue(DReg &d_reg, ROB &robNew, std::string inst_info) {
+      auto &entry = robNew.rob[robNew.end];
+
+      entry.ready = false;
+      entry.busy = true;
+      entry.inst = d_reg.inst;
+      entry.rd_type = d_reg.rd_reg_type;
+      entry.rd = d_reg.dest;
+      entry.inst_info = inst_info;
+
+      auto rob_index = robNew.end;
+
+      increase(robNew.end);
+      ++robNew.size;
+
+      return rob_index;
+    }
+
+    void increase(int &x) {
+      ++x;
+      if (x >= capacity)
+        x -= capacity;
+    }
+
+    bool checkLoad(int rob_index, uint32_t A) {
+      int check_front = front;
+      while (check_front != rob_index) {
+        if (isStore(rob[check_front].inst)) {
+          if (std::abs((long long)rob[check_front].A - (long long)A) < 8)
+            return false;
+        }
+        increase(check_front);
+      }
+      return true;
+    }
+
+    void print() {
+      int print_front = front;
+      if (size) {
+        std::cerr << "(" << print_front << ")" << rob[print_front].inst_info
+                  << "\n";
+        increase(print_front);
+      }
+      while (print_front != end) {
+        std::cerr << "(" << print_front << ")" << rob[print_front].inst_info
+                  << "\n";
+        increase(print_front);
+      }
+    }
+
+    int front;
+    int end;
+    int size;
+    int capacity;
+    std::vector<ROBEntry> rob;
+  };
+
+  struct ReservationStation {
     void clear() {
       busy = false;
       inst = UNKNOWN;
@@ -525,57 +695,59 @@ private:
       rs1_type = RegType::INVALID;
       rs1 = -1;
       rs1_ready = false;
-      rs1_FU = unknown;
+      rs1_ROB = -1;
 
       rs2_type = RegType::INVALID;
       rs2 = -1;
       rs2_ready = false;
-      rs2_FU = unknown;
+      rs2_ROB = -1;
 
       rs3_type = RegType::INVALID;
       rs3 = -1;
       rs3_ready = false;
-      rs3_FU = unknown;
+      rs3_ROB = -1;
     }
 
     bool ready() { return rs1_ready && rs2_ready && rs3_ready; }
 
-    bool check_WAR(RegType other_rd_type, RegId other_rd, executeComponent FU) {
-      if (!busy || dispatched)
-        return true;
-      bool pass = true;
-      if (same_reg(other_rd_type, other_rd, rs1_type, rs1) && rs1_ready) {
-        pass = false;
-      }
-      if (same_reg(other_rd_type, other_rd, rs2_type, rs2) && rs2_ready) {
-        pass = false;
-      }
-      if (same_reg(other_rd_type, other_rd, rs3_type, rs3) && rs3_ready) {
-        pass = false;
-      }
-      return pass;
-    }
-
-    void update_ready(RegType other_rd_type, RegId other_rd) {
+    void update_ready(RegType other_rd_type, RegId other_rd, uint64_t x_rd,
+                      float f_rd, ROBIndex rob_index) {
       if (!busy || dispatched)
         return;
-      if (same_reg(other_rd_type, other_rd, rs1_type, rs1)) {
+      if (rs1_ROB == rob_index &&
+          same_reg(other_rd_type, other_rd, rs1_type, rs1)) {
         rs1_ready = true;
+        op1 = x_rd;
+        op1_f = f_rd;
+        if (VERBOSE)
+          std::cerr << "Updated rs1 of " << inst_info << "\n";
       }
-      if (same_reg(other_rd_type, other_rd, rs2_type, rs2)) {
+      if (rs2_ROB == rob_index &&
+          same_reg(other_rd_type, other_rd, rs2_type, rs2)) {
         rs2_ready = true;
+        op2 = x_rd;
+        op2_f = f_rd;
+        if (VERBOSE)
+          std::cerr << "Updated rs2 of " << inst_info << "\n";
       }
-      if (same_reg(other_rd_type, other_rd, rs3_type, rs3)) {
+      if (rs3_ROB == rob_index &&
+          same_reg(other_rd_type, other_rd, rs3_type, rs3)) {
         rs3_ready = true;
+        op3_f = f_rd;
+        if (VERBOSE)
+          std::cerr << "Updated rs3 of " << inst_info << "\n";
       }
     }
+    std::string inst_info;
 
+    executeComponent fu;
+    Inst inst;
     bool busy;
     bool dispatched;
-    Inst inst;
     uint64_t pc;
-
     int offset;
+    uint32_t A;
+    int rob_index;
 
     RegType rd_type;
     RegId rd;
@@ -585,120 +757,223 @@ private:
     int64_t op1;
     float op1_f;
     bool rs1_ready;
-    executeComponent rs1_FU;
+    ROBIndex rs1_ROB;
 
     RegType rs2_type;
     RegId rs2;
     int64_t op2;
     float op2_f;
     bool rs2_ready;
-    executeComponent rs2_FU;
+    ROBIndex rs2_ROB;
 
     RegType rs3_type;
     RegId rs3;
     float op3_f;
     bool rs3_ready;
-    executeComponent rs3_FU;
+    ROBIndex rs3_ROB;
 
     int64_t out;
     float out_f;
     int timeout;
   };
 
-  struct Scoreboard {
-    Scoreboard() {
+  struct Tomasulo {
+    Tomasulo() : rob(number_of_component * 2), rs(number_of_component * 2) {
+      std::fill(FU_busy, FU_busy + number_of_component, 0);
+      for (int i = 0; i < number_of_component; ++i) {
+        rs[2 * i].fu = (executeComponent)i;
+        rs[2 * i + 1].fu = (executeComponent)i;
+      }
       memset(result_status_x, -1, sizeof(result_status_x));
       memset(result_status_f, -1, sizeof(result_status_f));
-      for (int i = 0; i < number_of_component; ++i)
-        fu_status[i].clear();
+    }
+
+    int get_free_RS(executeComponent fu) {
+      int free_index = -1;
+      if (VERBOSE) {
+        for (int i = 0; i < rs.size(); ++i) {
+          std::cerr << rs[i].busy << " ";
+        }
+        std::cerr << "\n";
+      }
+      for (int i = 0; i < rs.size(); ++i) {
+        if (rs[i].fu == fu && !rs[i].busy) {
+          free_index = i;
+          break;
+        }
+      }
+      return free_index;
     }
 
     // * try to issue an instruction
     // return false: 1. FU needed busy 3. result register pending
-    bool issue(DReg &d_reg, FReg &f_reg, Scoreboard &scoreboardNew) {
+    bool issue(DReg &d_reg, FReg &f_reg, Tomasulo &tomasulo,
+               Tomasulo &tomasuloNew, std::string inst_info) {
+      // * ROB available
+      if (!rob.free()) {
+        if (VERBOSE)
+          std::cerr << "No enough ROB!\n";
+        return false;
+      }
       // check FU status
       executeComponent fu = getComponentUsed(d_reg.inst);
-      if (fu_status[fu].busy)
+      // * RS available
+      auto rs_index = get_free_RS(fu);
+      if (rs_index == -1) {
+        if (VERBOSE)
+          std::cerr << "No enough RS!\n";
         return false;
-      if (d_reg.inst == FMADD_S || d_reg.inst == FMSUB_S) {
-        // also need to check fmaAdd
-        if (fu_status[fmaAdd].busy)
-          return false;
-      }
-      // check rd
-      if (d_reg.rd_reg_type == RegType::INT) {
-        if (result_status_x[d_reg.dest] != -1)
-          return false;
-      } else if (d_reg.rd_reg_type == RegType::FLOAT) {
-        if (result_status_f[d_reg.dest] != -1)
-          return false;
-      }
-      // clear to issue
-      // ! dirty workaround
-      std::swap(fu_status[fu], scoreboardNew.fu_status[fu]);
-
-      fu_status[fu].inst = d_reg.inst;
-      fu_status[fu].busy = true;
-      fu_status[fu].dispatched = false;
-      fu_status[fu].timeout = latency[fu];
-      fu_status[fu].offset = d_reg.offset;
-      fu_status[fu].pc = d_reg.pc;
-
-      fu_status[fu].op1 = d_reg.op1;
-      fu_status[fu].op2 = d_reg.op2;
-      fu_status[fu].op1_f = d_reg.op1_f;
-      fu_status[fu].op2_f = d_reg.op3_f;
-      fu_status[fu].op3_f = d_reg.op3_f;
-
-      fu_status[fu].rd = d_reg.dest;
-      fu_status[fu].rd_type = d_reg.rd_reg_type;
-      if (d_reg.rd_reg_type == RegType::INT) {
-        scoreboardNew.result_status_x[d_reg.dest] = fu;
-      } else if (d_reg.rd_reg_type == RegType::FLOAT) {
-        scoreboardNew.result_status_f[d_reg.dest] = fu;
       }
 
-      fu_status[fu].rs1 = d_reg.rs1;
-      fu_status[fu].rs1_type = d_reg.rs1_reg_type;
-      if (d_reg.rs1_reg_type == RegType::INT) {
-        fu_status[fu].rs1_ready = (result_status_x[d_reg.rs1] == -1);
-        fu_status[fu].rs1_FU = (executeComponent)result_status_x[d_reg.rs1];
-      } else if (fu_status[fu].rs1_type == RegType::FLOAT) {
-        fu_status[fu].rs1_ready = (result_status_f[d_reg.rs1] == -1);
-        fu_status[fu].rs1_FU = (executeComponent)result_status_f[d_reg.rs1];
+      // * ROB issue
+      auto rob_index = tomasulo.rob.issue(d_reg, tomasuloNew.rob, inst_info);
+
+      if (VERBOSE)
+        std::cerr << "ROB:  " << rob_index << "   "
+                  << "RS:  " << rs_index << "\n";
+
+      // * RS issue
+      auto &entry = tomasuloNew.rs[rs_index];
+      // if (d_reg.rd_reg_type == RegType::INT) {
+      //   if (result_status_x[d_reg.dest] != -1)
+      //     return false;
+      // } else if (d_reg.rd_reg_type == RegType::FLOAT) {
+      //   if (result_status_f[d_reg.dest] != -1)
+      //     return false;
+      // }
+      // // clear to issue
+      entry.A = -1;
+      entry.inst_info = inst_info;
+
+      entry.inst = d_reg.inst;
+      entry.busy = true;
+      entry.dispatched = false;
+      entry.timeout = latency[fu];
+      entry.offset = d_reg.offset;
+      entry.pc = d_reg.pc;
+
+      entry.rob_index = rob_index;
+
+      entry.op1 = d_reg.op1;
+      entry.op2 = d_reg.op2;
+      entry.op1_f = d_reg.op1_f;
+      entry.op2_f = d_reg.op2_f;
+      entry.op3_f = d_reg.op3_f;
+
+      entry.rd = d_reg.dest;
+      entry.rd_type = d_reg.rd_reg_type;
+      if (entry.rd == 0 && entry.rd_type == RegType::INT) {
+        entry.rd_type = RegType::INVALID;
+      }
+      if (entry.rd_type == RegType::INT) {
+        tomasuloNew.result_status_x[entry.rd] = rob_index;
+        if (VERBOSE)
+          std::cerr << "RegStat: " << REGNAME[entry.rd] << " <- " << rob_index
+                    << "\n";
+      } else if (entry.rd_type == RegType::FLOAT) {
+        tomasuloNew.result_status_f[entry.rd] = rob_index;
+      }
+      if (VERBOSE) {
+        std::cerr << "Op status: "
+                  << "\n";
+
+        std::cerr << " Offset: " << entry.offset << "\n";
+      }
+
+      entry.rs1 = d_reg.rs1;
+      entry.rs1_type = d_reg.rs1_reg_type;
+      if (entry.rs1_type == RegType::INT) {
+        if (result_status_x[entry.rs1] == -1) {
+          entry.rs1_ready = true;
+          entry.op1 = d_reg.op1;
+          if (VERBOSE)
+            std::cerr << " Op1 ready: " << entry.op1 << "\n";
+        } else if (tomasulo.rob[result_status_x[entry.rs1]].ready) {
+          entry.rs1_ready = true;
+          entry.op1 = tomasulo.rob[result_status_x[entry.rs1]].x_rd;
+          if (VERBOSE)
+            std::cerr << " Op1 from ROB: " << result_status_x[entry.rs1]
+                      << " : " << entry.op1 << "\n";
+        } else {
+          entry.rs1_ready = false;
+          if (VERBOSE)
+            std::cerr << "Pending on ROB:  " << result_status_x[entry.rs1]
+                      << "\n";
+        }
+        entry.rs1_ROB = result_status_x[entry.rs1];
+      } else if (entry.rs1_type == RegType::FLOAT) {
+        if (result_status_f[entry.rs1] == -1) {
+          entry.rs1_ready = true;
+          entry.op1_f = d_reg.op1_f;
+        } else if (tomasulo.rob[result_status_f[entry.rs1]].ready) {
+          entry.rs1_ready = true;
+          entry.op1_f = tomasulo.rob[result_status_f[entry.rs1]].f_rd;
+        } else {
+          entry.rs1_ready = false;
+        }
+        entry.rs1_ROB = result_status_f[entry.rs1];
       } else {
-        fu_status[fu].rs1_ready = true;
+        entry.rs1_ready = true;
       }
 
-      fu_status[fu].rs2 = d_reg.rs2;
-      fu_status[fu].rs2_type = d_reg.rs2_reg_type;
-      if (d_reg.rs2_reg_type == RegType::INT) {
-        fu_status[fu].rs2_ready = (result_status_x[d_reg.rs2] == -1);
-        fu_status[fu].rs2_FU = (executeComponent)result_status_x[d_reg.rs2];
-      } else if (fu_status[fu].rs2_type == RegType::FLOAT) {
-        fu_status[fu].rs2_ready = (result_status_f[d_reg.rs2] == -1);
-        fu_status[fu].rs2_FU = (executeComponent)result_status_f[d_reg.rs2];
+      entry.rs2 = d_reg.rs2;
+      entry.rs2_type = d_reg.rs2_reg_type;
+      if (entry.rs2_type == RegType::INT) {
+        if (result_status_x[entry.rs2] == -1) {
+          entry.rs2_ready = true;
+          entry.op2 = d_reg.op2;
+          if (VERBOSE)
+            std::cerr << " Op2 ready: " << entry.op2 << "\n";
+        } else if (tomasulo.rob[result_status_x[entry.rs2]].ready) {
+          entry.rs2_ready = true;
+          entry.op2 = tomasulo.rob[result_status_x[entry.rs2]].x_rd;
+          if (VERBOSE)
+            std::cerr << " Op2 from ROB: " << result_status_x[entry.rs2]
+                      << " : " << entry.op2 << "\n";
+        } else {
+          entry.rs2_ready = false;
+          if (VERBOSE)
+            std::cerr << "Pending on ROB:  " << result_status_x[entry.rs2]
+                      << "\n";
+        }
+        entry.rs2_ROB = result_status_x[entry.rs2];
+      } else if (entry.rs2_type == RegType::FLOAT) {
+        if (result_status_f[entry.rs2] == -1) {
+          entry.rs2_ready = true;
+          entry.op2_f = d_reg.op2_f;
+        } else if (tomasulo.rob[result_status_f[entry.rs2]].ready) {
+          entry.rs2_ready = true;
+          entry.op2_f = tomasulo.rob[result_status_f[entry.rs2]].f_rd;
+        } else {
+          entry.rs2_ready = false;
+        }
+        entry.rs2_ROB = result_status_f[entry.rs2];
       } else {
-        fu_status[fu].rs2_ready = true;
+        entry.rs2_ready = true;
       }
 
-      fu_status[fu].rs3 = d_reg.rs3;
-      fu_status[fu].rs3_type = d_reg.rs3_reg_type;
-      if (d_reg.rs3_reg_type == RegType::INT) {
-        fu_status[fu].rs3_ready = (result_status_x[d_reg.rs3] == -1);
-        fu_status[fu].rs3_FU = (executeComponent)result_status_x[d_reg.rs3];
-      } else if (fu_status[fu].rs3_type == RegType::FLOAT) {
-        fu_status[fu].rs3_ready = (result_status_f[d_reg.rs3] == -1);
-        fu_status[fu].rs3_FU = (executeComponent)result_status_f[d_reg.rs3];
+      entry.rs3 = d_reg.rs3;
+      entry.rs3_type = d_reg.rs3_reg_type;
+      if (entry.rs3_type == RegType::FLOAT) {
+        if (result_status_f[entry.rs3] == -1) {
+          entry.rs3_ready = true;
+          entry.op3_f = d_reg.op3_f;
+        } else if (tomasulo.rob[result_status_f[entry.rs3]].ready) {
+          entry.rs3_ready = true;
+          entry.op3_f = tomasulo.rob[result_status_f[entry.rs3]].f_rd;
+        } else {
+          entry.rs3_ready = false;
+        }
+        entry.rs3_ROB = result_status_f[entry.rs3];
       } else {
-        fu_status[fu].rs3_ready = true;
+        entry.rs3_ready = true;
       }
 
-      if (d_reg.inst == FMADD_S || d_reg.inst == FMSUB_S) {
-        // also lock fmaAdd
-        scoreboardNew.fu_status[fmaAdd].busy = true;
-        scoreboardNew.fu_status[fmaAdd].timeout = -1;
-      }
+      // if (d_reg.inst == FMADD_S || d_reg.inst == FMSUB_S) {
+      //   // also lock fmaAdd
+      //   scoreboardNew.fu_status[fmaAdd].busy = true;
+      //   scoreboardNew.fu_status[fmaAdd].timeout = -1;
+      // }
 
       // * stall fetch & decode for branch / jump
       if (isBranch(d_reg.inst) || isJump(d_reg.inst)) {
@@ -706,83 +981,159 @@ private:
         d_reg.stall = datamem_stall_lock;
       }
 
-      // ! dirty workaround
-      std::swap(fu_status[fu], scoreboardNew.fu_status[fu]);
-
       return true;
     }
 
     // 1. execute instructions when source operands are ready
     // 2. retire instructions when there's no WAR hazard
-    void tick(Simulator *simulator, Scoreboard &scoreboardNew) {
+    void tick(Simulator *simulator, Tomasulo &tomasuloNew) {
       // printf("memCalc FU %d   %d   %d   %d   %d\n", fu_status[0].inst,
       //        fu_status[0].busy, fu_status[0].ready(), fu_status[0].rs1_ready,
       //        fu_status[0].rs2_ready);
-      for (int i = 0; i < number_of_component; ++i) {
-        if (fu_status[i].busy && fu_status[i].ready()) {
-          if (!fu_status[i].dispatched) {
-            // dispatch to FU
-            simulator->execute(fu_status[i], scoreboardNew.fu_status[i]);
-            scoreboardNew.fu_status[i].dispatched = true;
-          } else {
-            // printf("FU:  %d dispatched, timeout: %d\n", i,
-            //        fu_status[i].timeout);
-            // check if complete
-            // ! note that for fma the fmaAdd timeout was set to -1 and need to
-            // ! be unlocked by fmaMul
-            if (fu_status[i].timeout == 0) {
-              // ready to retire, check WAR
-              bool WAR_pass = true;
-              for (int j = 0; j < number_of_component; ++j) {
-                if (j != i) {
-                  if (!fu_status[j].check_WAR(fu_status[i].rd_type,
-                                              fu_status[i].rd,
-                                              (executeComponent)i)) {
-                    WAR_pass = false;
-                    break;
-                  }
-                }
+      for (int i = 0; i < rs.size(); ++i)
+        if (rs[i].busy && rs[i].ready() && rs[i].dispatched) {
+          if (VERBOSE)
+            std::cerr
+                << "--------------------------EXECUTED---------------------"
+                   "---------\n";
+          if (isLoad(rs[i].inst) && rs[i].A == -1) {
+            // * Load step 1
+            tomasuloNew.rs[i].A = rs[i].op1 + rs[i].offset;
+            // * bypass
+            FU_busy[rs[i].fu] = false;
+            tomasuloNew.FU_busy[rs[i].fu] = false;
+            tomasuloNew.rs[i].dispatched = false;
+            tomasuloNew.rs[i].dispatched = false;
+          } else if (rs[i].timeout == 0) {
+            // * writeback
+            if (VERBOSE)
+              printf("FU:  %d completed\n", rs[i].fu);
+            // writeback
+            auto &rob_entry = tomasuloNew.rob[rs[i].rob_index];
+
+            // * value write back
+            if (rs[i].rd_type == RegType::INT && rs[i].rd != 0) {
+              rob_entry.x_rd = rs[i].out;
+            } else if (rs[i].rd_type == RegType::FLOAT) {
+              rob_entry.f_rd = rs[i].out_f;
+            }
+            if (isStore(rs[i].inst)) {
+              rob_entry.A = rs[i].out;
+              rob_entry.x_rd = rs[i].op2;
+              rob_entry.f_rd = rs[i].op2_f;
+            }
+            rob_entry.ready = true;
+            if (VERBOSE) {
+              std::cerr << "ROB ready: (" << rs[i].rob_index << ")"
+                        << "\n";
+              std::cerr << "Complete execution: " << rs[i].inst_info << "\n";
+            }
+
+            // * bypass
+            FU_busy[rs[i].fu] = false;
+            tomasuloNew.FU_busy[rs[i].fu] = false;
+            for (int j = 0; j < rs.size(); ++j) {
+              if (j != i) {
+                tomasuloNew.rs[j].update_ready(rs[i].rd_type, rs[i].rd,
+                                               rs[i].out, rs[i].out_f,
+                                               rs[i].rob_index);
               }
-              // printf("FU:  %d completed, WAR_pass: %d\n", i, WAR_pass);
-              if (WAR_pass) {
-                // writeback
-                simulator->writeBack(fu_status[i]);
-                scoreboardNew.fu_status[i].busy = false;
-                if (i == fmaMul && fu_status[fmaAdd].timeout < 0) {
-                  scoreboardNew.fu_status[fmaAdd].busy = false;
+              if (VERBOSE)
+                if (tomasuloNew.rs[j].busy && !tomasuloNew.rs[j].ready()) {
+                  std::cerr << tomasuloNew.rs[j].inst_info << " "
+                            << (!tomasuloNew.rs[j].rs1_ready ? " (x)rs1" : "")
+                            << (!tomasuloNew.rs[j].rs2_ready ? " (x)rs2" : "")
+                            << (!tomasuloNew.rs[j].rs3_ready ? " (x)rs3" : "")
+                            << "\n";
                 }
-                if (fu_status[i].rd_type == RegType::INT) {
-                  scoreboardNew.result_status_x[fu_status[i].rd] = -1;
-                  // printf("cleared INT  %d\n", fu_status[i].rd);
-                } else if (fu_status[i].rd_type == RegType::FLOAT) {
-                  scoreboardNew.result_status_f[fu_status[i].rd] = -1;
-                  // printf("cleared FP  %d\n", fu_status[i].rd);
-                }
-                for (int j = 0; j < number_of_component; ++j) {
-                  if (j != i) {
-                    scoreboardNew.fu_status[j].update_ready(
-                        fu_status[i].rd_type, fu_status[i].rd);
-                  }
+            }
+            if (VERBOSE)
+              std::cerr << "----------<><><><>\n";
+
+            if (rs[i].fu == dataMem) {
+              if (VERBOSE)
+                std::cerr << ">>>>LOAD/STORE finished!: " << rs[i].offset
+                          << "\n";
+              // * maintain order for load/store buffer
+              bool moved = false;
+              for (int j = i + 1; j < rs.size() && rs[j].fu == dataMem; ++j) {
+                tomasuloNew.rs[j - 1] = tomasuloNew.rs[j];
+                tomasuloNew.rs[j].busy = false;
+                rs[j - 1] = rs[j];
+                rs[j].busy = false;
+                moved = true;
+              }
+              if (!moved) {
+                tomasuloNew.rs[i].busy = false;
+              }
+            } else {
+              // * just remove from RS
+              tomasuloNew.rs[i].busy = false;
+            }
+          } else {
+            if (VERBOSE)
+              printf("Timeout:    %d\n", rs[i].timeout);
+            tomasuloNew.rs[i].timeout = rs[i].timeout - 1;
+          }
+        }
+
+      for (int i = 0; i < rs.size(); ++i) {
+        if (VERBOSE)
+          if (rs[i].busy && !rs[i].ready()) {
+            std::cerr << rs[i].inst_info << " "
+                      << (!rs[i].rs1_ready ? " (x)rs1" : "")
+                      << (!rs[i].rs2_ready ? " (x)rs2" : "")
+                      << (!rs[i].rs3_ready ? " (x)rs3" : "") << "\n";
+          }
+        if (rs[i].busy && rs[i].ready() && !rs[i].dispatched) {
+          if (FU_busy[rs[i].fu])
+            continue;
+          if (isLoad(rs[i].inst)) {
+            bool abort = false;
+            if (rs[i].A == -1) {
+              // * store before load
+              for (int j = i - 1; j >= 0 && rs[j].fu == dataMem; --j) {
+                if (rs[j].busy && isStore(rs[j].inst)) {
+                  abort = true;
+                  break;
                 }
               }
             } else {
-              // printf("Timeout:    %d\n", fu_status[i].timeout);
-              scoreboardNew.fu_status[i].timeout = fu_status[i].timeout - 1;
+              // * no overlap
+              abort = !rob.checkLoad(rs[i].rob_index, rs[i].A);
+            }
+            if (abort) {
+              continue;
             }
           }
+          if (VERBOSE)
+            std::cerr << "Begin execution: " << rs[i].inst_info << "\n";
+          // dispatch to FU
+          // * Simulate selection
+          FU_busy[rs[i].fu] = true;
+          tomasuloNew.FU_busy[rs[i].fu] = true;
+          if (!isLoad(rs[i].inst) || rs[i].A != -1) {
+            simulator->execute(rs[i], tomasuloNew.rs[i]);
+          }
+
+          tomasuloNew.rs[i].dispatched = true;
         }
       }
+
+      rob.commit(tomasuloNew.rob, simulator);
     }
 
-    FUStatus fu_status[number_of_component];
-    int result_status_x[32];
-    int result_status_f[32];
-  } scoreboard, scoreboardNew;
+    ROB rob;
+    ROBIndex result_status_x[32];
+    ROBIndex result_status_f[32];
+    std::vector<ReservationStation> rs;
+    bool FU_busy[number_of_component];
+  } tomasulo, tomasuloNew;
 
   void fetch();
   void decode();
-  void execute(FUStatus &fu_status, FUStatus &new_fu_status);
-  void writeBack(FUStatus &fu_status);
+  void execute(ReservationStation &rs, ReservationStation &new_rs);
+  // void writeBack(ReservationStation &rs);
 
   int64_t handleSystemCall(int64_t op1, int64_t op2);
 
